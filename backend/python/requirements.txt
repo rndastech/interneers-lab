@@ -1,2 +1,5 @@
 Django==6.0.2
 pymongo==4.16.0
+djangorestframework
+django-filter
+ecs-logging
