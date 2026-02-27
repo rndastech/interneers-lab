@@ -1,10 +1,13 @@
 from decimal import Decimal, InvalidOperation
+from bson import ObjectId
+from bson.errors import InvalidId
 from .exceptions import ValidationError
+from inventory.domain.config import DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MIN_PAGE_SIZE, MAX_PAGE_SIZE
 
 def validate_required_fields(data, required_fields):
-    for field in required_fields:
-        if field not in data:
-            raise ValidationError(f'Missing required field: {field}')
+    missing_fields = [field for field in required_fields if field not in data]
+    if missing_fields:
+        raise ValidationError(f'Missing required fields: {", ".join(missing_fields)}')
 
 
 def validate_price(raw_price):
@@ -41,20 +44,25 @@ def validate_product_id(raw_id):
     if raw_id is None:
         raise ValidationError('Product ID is required')
     try:
-        return int(raw_id)
-    except (ValueError, TypeError):
+        ObjectId(str(raw_id))
+        return str(raw_id)
+    except (InvalidId, TypeError):
         raise ValidationError('Invalid product ID')
 
-
-def validate_pagination(raw_page, raw_page_size):
+def validate_cursor_pagination(raw_page_size, raw_after):
     try:
-        page = int(raw_page) if raw_page is not None else 1
-        page_size = int(raw_page_size) if raw_page_size is not None else 10
+        page_size = int(raw_page_size) if raw_page_size is not None else DEFAULT_PAGE_SIZE
     except (ValueError, TypeError):
-        raise ValidationError('Invalid page or page_size parameter')
-    if page < 1:
-        raise ValidationError('Page number must be greater than 0')
-    if page_size < 1 or page_size > 100:
-        raise ValidationError('Page size must be between 1 and 100')
+        raise ValidationError('Invalid page_size parameter')
+    if page_size < MIN_PAGE_SIZE or page_size > MAX_PAGE_SIZE:
+        raise ValidationError(f'Page size must be between {MIN_PAGE_SIZE} and {MAX_PAGE_SIZE}')
 
-    return page, page_size
+    after = None
+    if raw_after is not None:
+        try:
+            ObjectId(str(raw_after))
+            after = str(raw_after)
+        except Exception:
+            raise ValidationError('Invalid cursor value for "after" parameter')
+
+    return page_size, after

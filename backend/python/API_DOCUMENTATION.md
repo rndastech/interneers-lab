@@ -14,14 +14,16 @@ This is a RESTful API for managing product inventory. The API provides endpoints
 
 1. [Authentication](#authentication)
 2. [Product Model](#product-model)
-3. [Endpoints](#endpoints)
+3. [Request Tracing](#request-tracing)
+4. [Endpoints](#endpoints)
    - [Create Product](#1-create-product)
    - [Get Product](#2-get-product)
    - [List Products](#3-list-products)
    - [Update Product](#4-update-product)
    - [Delete Product](#5-delete-product)
-4. [Error Handling](#error-handling)
-5. [Examples](#examples)
+5. [Pagination](#pagination)
+6. [Error Handling](#error-handling)
+7. [Examples](#examples)
 
 ---
 
@@ -37,17 +39,29 @@ A product has the following attributes:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | integer | Auto-generated | Unique identifier for the product |
+| `id` | string (ObjectId) | Auto-generated | MongoDB ObjectId — unique identifier |
 | `name` | string | **Yes** | Product name (max 255 characters) |
 | `description` | string | No | Detailed product description |
-| `barcode` | string | No | Unique barcode identifier (max 100 characters) |
-| `category` | string | No | Product category (max 255 characters) |
-| `brand` | string | No | Product brand or manufacturer (max 100 characters) |
-| `price` | decimal | **Yes** | Product price (minimum 0.01, max 10 digits with 2 decimal places) |
-| `quantity` | integer | No | Current quantity in warehouse (default: 0, minimum: 0) |
-| `minimum_stock_level` | integer | No | Minimum stock level before reorder (default: 0, minimum: 0) |
-| `created_at` | datetime | Auto-generated | Timestamp when product was created |
-| `updated_at` | datetime | Auto-updated | Timestamp when product was last updated |
+| `barcode` | string | No | Unique barcode identifier. Enforced by a sparse unique index in MongoDB |
+| `category` | string | No | Product category |
+| `brand` | string | No | Product brand or manufacturer |
+| `price` | decimal | **Yes** | Product price (minimum 0.01) |
+| `quantity` | integer | No | Current quantity in stock (default: 0, minimum: 0) |
+| `minimum_stock_level` | integer | No | Minimum stock before reorder alert (default: 0, minimum: 0) |
+| `created_at` | datetime string | Auto-generated | ISO 8601 timestamp set on creation |
+| `updated_at` | datetime string | Auto-updated | ISO 8601 timestamp updated on every change |
+
+> **Note**: Product IDs are MongoDB ObjectIds represented as 24-character hex strings (e.g. `"65f1a2b3c4d5e6f7a8b9c0d1"`). Passing a non-ObjectId string as an ID returns `400 Bad Request`.
+
+---
+
+## Request Tracing
+
+Every request is assigned a unique `X-Request-ID` header (UUIDv4). The middleware:
+- Reads an incoming `X-Request-ID` header if provided (pass-through mode for distributed tracing).
+- Generates a new UUID if none is present.
+- Echoes the ID back in the response `X-Request-ID` header.
+- Injects the ID into every structured log line for the duration of the request.
 
 ---
 
@@ -57,17 +71,17 @@ A product has the following attributes:
 
 Create a new product in the inventory.
 
-**Endpoint**: `POST /inventory/products/create/`
+**Endpoint**: `POST /inventory/products/`
 
 **Request Body**:
 ```json
 {
   "name": "Product Name",
+  "price": "99.99",
   "description": "Product description (optional)",
   "barcode": "123456789 (optional)",
   "category": "Electronics (optional)",
   "brand": "Brand Name (optional)",
-  "price": "99.99",
   "quantity": 100,
   "minimum_stock_level": 10
 }
@@ -78,25 +92,22 @@ Create a new product in the inventory.
 - **Body**:
 ```json
 {
-  "id": 1,
+  "id": "65f1a2b3c4d5e6f7a8b9c0d1",
   "name": "Product Name",
   "description": "Product description",
   "barcode": "123456789",
   "category": "Electronics",
   "brand": "Brand Name",
-  "price": "99.99",
+  "price": 99.99,
   "quantity": 100,
   "minimum_stock_level": 10,
-  "created_at": "2026-02-17T10:30:00Z",
-  "updated_at": "2026-02-17T10:30:00Z"
+  "created_at": "2026-02-26T10:30:00.000000",
+  "updated_at": "2026-02-26T10:30:00.000000"
 }
 ```
 
 **Error Responses**:
-- **Code**: `400 Bad Request`
-  - Missing required fields (name, price)
-  - Invalid data types or values
-  - Duplicate barcode
+- **Code**: `400 Bad Request` — Missing required fields (`name`, `price`), invalid data types or values, or duplicate barcode
 - **Body**:
 ```json
 {
@@ -106,7 +117,7 @@ Create a new product in the inventory.
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8000/inventory/products/create/ \
+curl -X POST http://localhost:8000/inventory/products/ \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Laptop",
@@ -124,35 +135,35 @@ curl -X POST http://localhost:8000/inventory/products/create/ \
 
 ### 2. Get Product
 
-Retrieve a single product by its ID.
+Retrieve a single product by its MongoDB ObjectId.
 
-**Endpoint**: `GET /inventory/products/detail/?id=<product_id>`
+**Endpoint**: `GET /inventory/products/<product_id>/`
 
-**Query Parameters**:
-- `id` (required): The product ID
+**Path Parameters**:
+- `product_id` (required): The product's MongoDB ObjectId (24-character hex string)
 
 **Success Response**:
 - **Code**: `200 OK`
 - **Body**:
 ```json
 {
-  "id": 1,
+  "id": "65f1a2b3c4d5e6f7a8b9c0d1",
   "name": "Product Name",
   "description": "Product description",
   "barcode": "123456789",
   "category": "Electronics",
   "brand": "Brand Name",
-  "price": "99.99",
+  "price": 99.99,
   "quantity": 100,
   "minimum_stock_level": 10,
-  "created_at": "2026-02-17T10:30:00Z",
-  "updated_at": "2026-02-17T10:30:00Z"
+  "created_at": "2026-02-26T10:30:00.000000",
+  "updated_at": "2026-02-26T10:30:00.000000"
 }
 ```
 
 **Error Responses**:
-- **Code**: `400 Bad Request` - Invalid or missing ID
-- **Code**: `404 Not Found` - Product not found
+- **Code**: `400 Bad Request` — Invalid ObjectId format
+- **Code**: `404 Not Found` — Product does not exist (or has been soft-deleted)
 - **Body**:
 ```json
 {
@@ -162,65 +173,55 @@ Retrieve a single product by its ID.
 
 **Example**:
 ```bash
-curl http://localhost:8000/inventory/products/detail/?id=1
+curl http://localhost:8000/inventory/products/65f1a2b3c4d5e6f7a8b9c0d1/
 ```
 
 ---
 
 ### 3. List Products
 
-Retrieve a list of all products with optional filtering and pagination.
+Retrieve a paginated list of products with optional filtering and search.
 
 **Endpoint**: `GET /inventory/products/`
 
 **Query Parameters** (all optional):
-- `category`: Filter products by category
-- `search`: Search in product name, barcode, and description
-- `page`: Page number (default: 1, minimum: 1)
-- `page_size`: Number of items per page (default: 10, minimum: 1, maximum: 100)
+- `category`: Filter products by an exact category string
+- `search`: Case-insensitive substring search across `name`, `barcode`, and `description`
+- `page_size`: Number of items per page (default: `10`, minimum: `1`, maximum: `100`)
+- `after`: Cursor for the next page — use the value from the `next` URL returned in the previous response
+
+> See [Pagination](#pagination) for a detailed explanation of the cursor-based scheme.
 
 **Success Response**:
 - **Code**: `200 OK`
 - **Body**:
 ```json
 {
-  "count": 25,
-  "page": 1,
+  "count": 10,
   "page_size": 10,
-  "total_pages": 3,
+  "next": "http://localhost:8000/inventory/products/?page_size=10&after=65f1a2b3c4d5e6f7a8b9c0d1",
   "results": [
     {
-      "id": 1,
+      "id": "65f1a2b3c4d5e6f7a8b9c0d1",
       "name": "Product 1",
       "description": "Description 1",
       "barcode": "123456789",
       "category": "Electronics",
       "brand": "Brand A",
-      "price": "99.99",
+      "price": 99.99,
       "quantity": 100,
       "minimum_stock_level": 10,
-      "created_at": "2026-02-17T10:30:00Z",
-      "updated_at": "2026-02-17T10:30:00Z"
-    },
-    {
-      "id": 2,
-      "name": "Product 2",
-      "description": "Description 2",
-      "barcode": "987654321",
-      "category": "Clothing",
-      "brand": "Brand B",
-      "price": "49.99",
-      "quantity": 200,
-      "minimum_stock_level": 20,
-      "created_at": "2026-02-17T11:00:00Z",
-      "updated_at": "2026-02-17T11:00:00Z"
+      "created_at": "2026-02-26T10:30:00.000000",
+      "updated_at": "2026-02-26T10:30:00.000000"
     }
   ]
 }
 ```
 
+> `next` is `null` when there are no more pages.
+
 **Error Responses**:
-- **Code**: `400 Bad Request` - Invalid page or page_size parameter
+- **Code**: `400 Bad Request` — Invalid `page_size` or `after` cursor
 - **Body**:
 ```json
 {
@@ -230,34 +231,34 @@ Retrieve a list of all products with optional filtering and pagination.
 
 **Examples**:
 
-1. Get all products (first page, default 10 items):
+1. First page (default 10 items, newest first):
 ```bash
 curl http://localhost:8000/inventory/products/
 ```
 
-2. Get specific page:
+2. Custom page size:
 ```bash
-curl http://localhost:8000/inventory/products/?page=2
+curl "http://localhost:8000/inventory/products/?page_size=20"
 ```
 
-3. Get products with custom page size:
+3. Next page using cursor:
 ```bash
-curl http://localhost:8000/inventory/products/?page=1&page_size=20
+curl "http://localhost:8000/inventory/products/?page_size=10&after=65f1a2b3c4d5e6f7a8b9c0d1"
 ```
 
-4. Filter by category with pagination:
+4. Filter by category:
 ```bash
-curl http://localhost:8000/inventory/products/?category=Electronics&page=1&page_size=10
+curl "http://localhost:8000/inventory/products/?category=Electronics&page_size=10"
 ```
 
-5. Search products with pagination:
+5. Search with pagination:
 ```bash
-curl http://localhost:8000/inventory/products/?search=laptop&page=1&page_size=5
+curl "http://localhost:8000/inventory/products/?search=laptop&page_size=5"
 ```
 
 6. Combine all filters:
 ```bash
-curl http://localhost:8000/inventory/products/?category=Electronics&search=laptop&page=1&page_size=10
+curl "http://localhost:8000/inventory/products/?category=Electronics&search=laptop&page_size=10"
 ```
 
 ---
@@ -266,12 +267,12 @@ curl http://localhost:8000/inventory/products/?category=Electronics&search=lapto
 
 Update an existing product (partial or full update).
 
-**Endpoint**: `PUT /inventory/products/update/?id=<product_id>` or `PATCH /inventory/products/update/?id=<product_id>`
+**Endpoint**: `PUT /inventory/products/<product_id>/` or `PATCH /inventory/products/<product_id>/`
 
-**Query Parameters**:
-- `id` (required): The product ID
+**Path Parameters**:
+- `product_id` (required): The product's MongoDB ObjectId
 
-**Request Body** (all fields optional, include only fields you want to update):
+**Request Body** (include only the fields you want to update):
 ```json
 {
   "name": "Updated Product Name",
@@ -281,28 +282,30 @@ Update an existing product (partial or full update).
 }
 ```
 
+**Updatable fields**: `name`, `description`, `barcode`, `category`, `brand`, `price`, `quantity`, `minimum_stock_level`
+
 **Success Response**:
 - **Code**: `200 OK`
-- **Body**: Updated product object
+- **Body**: The full updated product object
 ```json
 {
-  "id": 1,
+  "id": "65f1a2b3c4d5e6f7a8b9c0d1",
   "name": "Updated Product Name",
   "description": "Updated description",
   "barcode": "123456789",
   "category": "Electronics",
   "brand": "Brand Name",
-  "price": "109.99",
+  "price": 109.99,
   "quantity": 150,
   "minimum_stock_level": 10,
-  "created_at": "2026-02-17T10:30:00Z",
-  "updated_at": "2026-02-17T12:00:00Z"
+  "created_at": "2026-02-26T10:30:00.000000",
+  "updated_at": "2026-02-26T12:00:00.000000"
 }
 ```
 
 **Error Responses**:
-- **Code**: `400 Bad Request` - Invalid data or duplicate barcode
-- **Code**: `404 Not Found` - Product not found
+- **Code**: `400 Bad Request` — Invalid ObjectId, invalid field values, or duplicate barcode
+- **Code**: `404 Not Found` — Product does not exist
 - **Body**:
 ```json
 {
@@ -312,7 +315,7 @@ Update an existing product (partial or full update).
 
 **Example**:
 ```bash
-curl -X PATCH http://localhost:8000/inventory/products/update/?id=1 \
+curl -X PATCH "http://localhost:8000/inventory/products/65f1a2b3c4d5e6f7a8b9c0d1/" \
   -H "Content-Type: application/json" \
   -d '{
     "price": "1399.99",
@@ -324,12 +327,12 @@ curl -X PATCH http://localhost:8000/inventory/products/update/?id=1 \
 
 ### 5. Delete Product
 
-Delete a product from the inventory.
+Soft-delete a product from the inventory. The document is flagged `is_deleted: true` in MongoDB and hidden from all subsequent reads and listings.
 
-**Endpoint**: `DELETE /inventory/products/delete/?id=<product_id>`
+**Endpoint**: `DELETE /inventory/products/<product_id>/`
 
-**Query Parameters**:
-- `id` (required): The product ID
+**Path Parameters**:
+- `product_id` (required): The product's MongoDB ObjectId
 
 **Success Response**:
 - **Code**: `204 No Content`
@@ -341,8 +344,8 @@ Delete a product from the inventory.
 ```
 
 **Error Responses**:
-- **Code**: `400 Bad Request` - Invalid or missing ID
-- **Code**: `404 Not Found` - Product not found
+- **Code**: `400 Bad Request` — Invalid ObjectId format
+- **Code**: `404 Not Found` — Product does not exist
 - **Body**:
 ```json
 {
@@ -352,8 +355,39 @@ Delete a product from the inventory.
 
 **Example**:
 ```bash
-curl -X DELETE http://localhost:8000/inventory/products/delete/?id=1
+curl -X DELETE "http://localhost:8000/inventory/products/65f1a2b3c4d5e6f7a8b9c0d1/"
 ```
+
+---
+
+## Pagination
+
+The list endpoint uses **cursor-based (keyset) pagination** sorted newest → oldest using MongoDB `_id` (which embeds a creation timestamp).
+
+**Why cursor-based?**
+- Stable: inserting or deleting documents between requests does not cause items to be skipped or duplicated.
+- Efficient: the query uses the default `_id` index — no extra sorting index needed.
+
+**How to paginate**:
+
+1. Make the first request — omit `after`:
+   ```
+   GET /inventory/products/?page_size=10
+   ```
+2. If the response contains a non-null `next` URL, follow it directly for the next page:
+   ```
+   GET /inventory/products/?page_size=10&after=65f1a2b3c4d5e6f7a8b9c0d1
+   ```
+3. Repeat until `next` is `null`.
+
+**Response fields**:
+
+| Field | Description |
+|-------|-------------|
+| `count` | Number of items returned in this page |
+| `page_size` | Requested page size |
+| `next` | Absolute URL for the next page, or `null` if this is the last page |
+| `results` | Array of product objects |
 
 ---
 
@@ -371,18 +405,19 @@ The API uses standard HTTP status codes and returns error messages in the follow
 
 | Code | Description |
 |------|-------------|
-| `200` | OK - Request succeeded |
-| `201` | Created - Resource created successfully |
-| `204` | No Content - Request succeeded with no response body |
-| `400` | Bad Request - Invalid request data or validation error |
-| `404` | Not Found - Resource not found |
-| `500` | Internal Server Error - Server error |
+| `200` | OK — Request succeeded |
+| `201` | Created — Resource created successfully |
+| `204` | No Content — Request succeeded (delete) |
+| `400` | Bad Request — Validation error, invalid ID format, or duplicate barcode |
+| `404` | Not Found — Product does not exist or has been deleted |
+| `500` | Internal Server Error — Unexpected server error |
 
 ### Common Error Scenarios
 
-1. **Validation Errors**: Missing required fields, invalid data types, values out of range
-2. **Not Found**: Attempting to access a product that doesn't exist
-3. **Duplicate Error**: Attempting to create a product with a barcode that already exists
+1. **Validation Errors**: Missing required fields (`name`, `price`), invalid data types, values out of range
+2. **Invalid ID**: A product ID that is not a valid 24-character MongoDB ObjectId hex string
+3. **Not Found**: Accessing a product that does not exist or has been soft-deleted
+4. **Duplicate Barcode**: Creating or updating a product with a barcode that already belongs to another active product
 
 ---
 
@@ -392,7 +427,7 @@ The API uses standard HTTP status codes and returns error messages in the follow
 
 #### 1. Create a new product
 ```bash
-curl -X POST http://localhost:8000/inventory/products/create/ \
+curl -X POST http://localhost:8000/inventory/products/ \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Wireless Mouse",
@@ -409,47 +444,47 @@ curl -X POST http://localhost:8000/inventory/products/create/ \
 Response:
 ```json
 {
-  "id": 5,
+  "id": "65f1a2b3c4d5e6f7a8b9c0d1",
   "name": "Wireless Mouse",
   "description": "Ergonomic wireless mouse with USB receiver",
   "barcode": "MOUSE001",
   "category": "Electronics",
   "brand": "TechCorp",
-  "price": "29.99",
+  "price": 29.99,
   "quantity": 250,
   "minimum_stock_level": 25,
-  "created_at": "2026-02-17T14:30:00Z",
-  "updated_at": "2026-02-17T14:30:00Z"
+  "created_at": "2026-02-26T14:30:00.000000",
+  "updated_at": "2026-02-26T14:30:00.000000"
 }
 ```
 
-#### 2. Get the product details
+#### 2. Get the product
 ```bash
-curl http://localhost:8000/inventory/products/detail/?id=5
+curl http://localhost:8000/inventory/products/65f1a2b3c4d5e6f7a8b9c0d1/
 ```
 
 #### 3. Update the stock quantity
 ```bash
-curl -X PATCH http://localhost:8000/inventory/products/update/?id=5 \
+curl -X PATCH "http://localhost:8000/inventory/products/65f1a2b3c4d5e6f7a8b9c0d1/" \
   -H "Content-Type: application/json" \
   -d '{"quantity": 200}'
 ```
 
-#### 4. List all electronics
+#### 4. List all electronics (first page)
 ```bash
-curl http://localhost:8000/inventory/products/?category=Electronics
+curl "http://localhost:8000/inventory/products/?category=Electronics&page_size=10"
 ```
 
 #### 5. Delete the product
 ```bash
-curl -X DELETE http://localhost:8000/inventory/products/delete/?id=5
+curl -X DELETE "http://localhost:8000/inventory/products/65f1a2b3c4d5e6f7a8b9c0d1/"
 ```
 
 ---
 
 ## PowerShell Examples
 
-For Windows PowerShell users, use `Invoke-RestMethod` or `Invoke-WebRequest`:
+For Windows PowerShell users:
 
 ### Create Product
 ```powershell
@@ -464,7 +499,7 @@ $body = @{
     minimum_stock_level = 25
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/create/" `
+Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/" `
   -Method POST `
   -ContentType "application/json" `
   -Body $body
@@ -472,13 +507,13 @@ Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/create/" `
 
 ### Get Product
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/detail/?id=1" `
+Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/65f1a2b3c4d5e6f7a8b9c0d1/" `
   -Method GET
 ```
 
 ### List Products
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/" `
+Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/?page_size=10" `
   -Method GET
 ```
 
@@ -488,7 +523,7 @@ $body = @{
     quantity = 200
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/update/?id=1" `
+Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/65f1a2b3c4d5e6f7a8b9c0d1/" `
   -Method PATCH `
   -ContentType "application/json" `
   -Body $body
@@ -496,7 +531,7 @@ Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/update/?id=1" `
 
 ### Delete Product
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/delete/?id=1" `
+Invoke-RestMethod -Uri "http://localhost:8000/inventory/products/65f1a2b3c4d5e6f7a8b9c0d1/" `
   -Method DELETE
 ```
 
@@ -521,72 +556,76 @@ def create_product():
         "brand": "TechCorp",
         "price": "29.99",
         "quantity": 250,
-        "minimum_stock_level": 25
+        "minimum_stock_level": 25,
     }
-    response = requests.post(f"{BASE_URL}/products/create/", json=data)
+    response = requests.post(f"{BASE_URL}/products/", json=data)
     return response.json()
 
 # Get a product
 def get_product(product_id):
-    response = requests.get(f"{BASE_URL}/products/detail/?id={product_id}")
+    response = requests.get(f"{BASE_URL}/products/{product_id}/")
     return response.json()
 
-# List all products
-def list_products(category=None, search=None):
-    params = {}
+# List all products (first page)
+def list_products(category=None, search=None, page_size=10, after=None):
+    params = {"page_size": page_size}
     if category:
-        params['category'] = category
+        params["category"] = category
     if search:
-        params['search'] = search
+        params["search"] = search
+    if after:
+        params["after"] = after
     response = requests.get(f"{BASE_URL}/products/", params=params)
     return response.json()
 
+# Iterate all pages
+def list_all_products(category=None, search=None, page_size=10):
+    after = None
+    while True:
+        page = list_products(category=category, search=search, page_size=page_size, after=after)
+        yield from page["results"]
+        if page["next"] is None:
+            break
+        # Extract the 'after' cursor from the next URL
+        from urllib.parse import urlparse, parse_qs
+        after = parse_qs(urlparse(page["next"]).query)["after"][0]
+
 # Update a product
 def update_product(product_id, data):
-    response = requests.patch(
-        f"{BASE_URL}/products/update/?id={product_id}",
-        json=data
-    )
+    response = requests.patch(f"{BASE_URL}/products/{product_id}/", json=data)
     return response.json()
 
 # Delete a product
 def delete_product(product_id):
-    response = requests.delete(f"{BASE_URL}/products/delete/?id={product_id}")
-    return response.json()
+    response = requests.delete(f"{BASE_URL}/products/{product_id}/")
+    return response.status_code  # 204
 
 # Example usage
 if __name__ == "__main__":
-    # Create
     product = create_product()
-    print(f"Created product: {product}")
-    
-    # Get
-    product_id = product['id']
-    product_details = get_product(product_id)
-    print(f"Product details: {product_details}")
-    
-    # List
-    all_products = list_products()
-    print(f"All products: {all_products}")
-    
-    # Update
-    updated = update_product(product_id, {"quantity": 200})
-    print(f"Updated product: {updated}")
-    
-    # Delete
-    delete_product(product_id)
-    print(f"Product {product_id} deleted")
+    print(f"Created: {product}")
+
+    product_id = product["id"]
+    print(f"Fetched: {get_product(product_id)}")
+
+    page = list_products()
+    print(f"First page ({page['count']} items), next={page['next']}")
+
+    print(f"Updated: {update_product(product_id, {'quantity': 200})}")
+
+    status = delete_product(product_id)
+    print(f"Deleted — HTTP {status}")
 ```
 
 ---
 
 ## Notes
 
-- All timestamps are in ISO 8601 format (UTC)
-- Products are ordered by creation date (newest first) by default
-- The `barcode` field must be unique across all products
-- Price must be greater than or equal to 0.01
-- Quantity and minimum_stock_level cannot be negative
-- The API uses Django REST Framework for serialization and validation
-
+- All timestamps are ISO 8601 strings in local server time (no timezone suffix)
+- Products are ordered newest-first by default (sorted by MongoDB `_id` descending)
+- The `barcode` field must be unique across all **active** (non-deleted) products
+- `price` must be ≥ 0.01
+- `quantity` and `minimum_stock_level` cannot be negative
+- A `WARNING` log is emitted automatically when `quantity ≤ minimum_stock_level` after a create or update
+- Deleted products are not physically removed from MongoDB; they are filtered out by an `is_deleted: true` flag
 

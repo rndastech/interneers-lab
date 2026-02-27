@@ -19,21 +19,27 @@ A **Product Inventory Management REST API** built with **Django** and **Django R
    - [Prerequisites](#prerequisites)
    - [Installation](#installation)
    - [Running the Server](#running-the-server)
-   - [Running with Docker](#running-with-docker)
-7. [Developer Guide](#developer-guide)
+   - [Running with Docker (Full Stack)](#running-with-docker-full-stack)
+7. [Observability: ELK Stack Logging](#observability-elk-stack-logging)
+   - [Architecture](#logging-architecture)
+   - [Log Format](#log-format)
+   - [Viewing Logs in Kibana](#viewing-logs-in-kibana)
+8. [Developer Guide](#developer-guide)
    - [Adding a New Field to Product](#adding-a-new-field-to-product)
    - [Swapping the Storage Backend](#swapping-the-storage-backend)
    - [Adding a New Endpoint](#adding-a-new-endpoint)
-8. [Testing](#testing)
-9. [Further Reading](#further-reading)
+9. [Testing](#testing)
+10. [Further Reading](#further-reading)
 
 ---
 
 ## Overview
 
-This API allows you to manage a product inventory with full CRUD (Create, Read, Update, Delete) operations. Products have attributes such as name, price, quantity, barcode, category, brand, and minimum stock level. The API also supports **search**, **category filtering**, and **pagination** out of the box.
+This API allows you to manage a product inventory with full CRUD (Create, Read, Update, Delete) operations. Products have attributes such as name, price, quantity, barcode, category, brand, and minimum stock level. The API also supports **search**, **category filtering**, and **cursor-based pagination** out of the box.
 
-Currently, the application uses an **in-memory data store** — meaning all data lives in Python dictionaries at runtime and resets when the server restarts. This is intentional: the architecture is designed so that swapping to a persistent database (MongoDB, PostgreSQL, etc.) requires changes **only** in the adapter layer, without touching any business logic.
+The application uses **MongoDB** as its persistent data store, accessed through a clean adapter that implements the `ProductRepository` port. The architecture is designed so that swapping to a different database (PostgreSQL, etc.) requires changes **only** in the adapter layer, without touching any business logic.
+
+All API activity is logged in **structured JSON** to a rotating log file, which is shipped to **Elasticsearch** by **Filebeat** and visualised in **Kibana** — a full ELK stack observability pipeline running via Docker Compose.
 
 ---
 
@@ -84,15 +90,19 @@ This means:
 │                     Port (Abstract Interface)                    │
 │   ports/repository.py                                           │
 │   — defines ProductRepository ABC                               │
-│   — declares: add, get_by_id, list_all, update, delete, etc.   │
+│   — declares: add, get_by_id, update, delete, etc.   │
 └─────────────────────┬───────────────────────────────────────────┘
                       │  implemented by
                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Adapter (Concrete Implementation)            │
-│   adapters/in_memory_repository.py                              │
-│   — stores products in a Python dictionary                      │
+│                     Adapters (Concrete Implementations)          │
+│   adapters/mongo_repository.py                                  │
+│   — stores products in MongoDB (soft-delete, cursor pagination) │
 │   — implements the ProductRepository interface                  │
+│                                                                 │
+│   adapters/python_logger.py                                     │
+│   — implements ProductLogger port via Python's logging module   │
+│   — JSONFormatter emits ECS-compatible JSON for Filebeat        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,51 +112,63 @@ This means:
 inventory/
 ├── domain/                  # 🧠 Core Domain — NO external dependencies
 │   ├── product.py           #    Product dataclass with to_dict/from_dict
-│   ├── validators.py        #    Pure validation functions (price, quantity, pagination, etc.)
-│   └── exceptions.py        #    Custom exceptions: ValidationError, NotFoundError, DuplicateError
+│   ├── validators.py        #    Pure validation functions (price, quantity, cursor pagination, etc.)
+│   ├── exceptions.py        #    Custom exceptions: ValidationError, NotFoundError, DuplicateError
+│   ├── config.py            #    Constants: required fields, allowed update fields, defaults
+│   └── request_context.py   #    Thread-local request ID storage
 │
 ├── ports/                   # 🔌 Ports — Abstract interfaces
-│   └── repository.py        #    ProductRepository ABC (add, get, list, update, delete, barcode_exists)
+│   ├── repository.py        #    ProductRepository ABC (add, get, list_paginated, update, delete, barcode_exists)
+│   └── logger.py            #    ProductLogger ABC (debug, info, warning, error, critical)
 │
 ├── adapters/                # 🔧 Adapters — Concrete implementations
-│   └── in_memory_repository.py  #  InMemoryProductRepository (dict-based storage)
+│   ├── mongo_repository.py  #    MongoProductRepository (MongoDB, soft-delete, cursor pagination)
+│   └── python_logger.py     #    PythonProductLogger + JSONFormatter (ECS-compatible structured logging)
 │
 ├── services/                # ⚙️ Application Services — Orchestration layer
-│   └── product_service.py   #    ProductService (create, get, list, update, delete)
+│   └── product_service.py   #    ProductService (create, get, list, update, delete, low_stock_check)
+│
+├── middleware/              # 🔗 Django Middleware
+│   └── request_id.py        #    RequestIDMiddleware — injects/propagates X-Request-ID header
 │
 ├── views.py                 # 🌐 Django Views — HTTP request/response translation
-├── urls.py                  # 🗺️ URL routing
-├── models.py                # (empty — not using Django ORM for now)
-├── serializers.py           # (empty — serialization handled by domain dataclass)
-└── tests.py                 # Test suite
+└── urls.py                  # 🗺️ URL routing
 ```
 
 ### Data Flow
 
 Here's what happens when a user creates a product:
 
-1. **`POST /inventory/products/create/`** hits `views.py::create_product()`
-2. The view delegates to `ProductService.create_product(data)`
-3. The service calls **validators** (from `domain/validators.py`) to check required fields, price, quantity, etc.
-4. The service checks **barcode uniqueness** via the repository port
-5. The service constructs a `Product` dataclass (from `domain/product.py`)
-6. The service calls `repository.add(product.to_dict())` — through the **port interface**
-7. The **adapter** (`InMemoryProductRepository`) stores it in a Python dict
-8. The dict representation flows back up through the service → view → HTTP response
+1. **`POST /inventory/products/`** hits the `products_list_create` view
+2. `RequestIDMiddleware` assigns a unique `X-Request-ID` to the request (propagated to all log entries)
+3. The view delegates to `ProductService.create_product(data)`
+4. The service calls **validators** (from `domain/validators.py`) to check required fields, price, quantity, etc.
+5. The service checks **barcode uniqueness** via the repository port
+6. The service constructs a `Product` dataclass (from `domain/product.py`)
+7. The service calls `repository.add(product.to_dict())` — through the **port interface**
+8. The **adapter** (`MongoProductRepository`) persists the document in MongoDB
+9. The dict representation flows back up through the service → view → HTTP response
+10. Every step is logged in structured JSON; Filebeat tails the log file and ships entries to Elasticsearch
 
-At no point does the domain or service layer know it's using an in-memory dict. It only knows it's calling methods on a `ProductRepository`.
+At no point does the domain or service layer know it's using MongoDB. It only knows it's calling methods on a `ProductRepository`.
 
 ---
 
 ## Features
 
 - **Full CRUD** — Create, Read, Update, Delete products
-- **Search** — Full-text search across product name, barcode, and description
+- **Search** — Full-text search across product name, barcode, and description (MongoDB regex, case-insensitive)
 - **Category filtering** — Filter product listings by category
-- **Pagination** — Configurable page size (1–100), default 10 per page
-- **Barcode uniqueness** — Enforced unique barcodes across all products
-- **Input validation** — Price, quantity, minimum stock level, product ID, and pagination parameters
+- **Cursor-based pagination** — Stable keyset pagination using MongoDB `_id` (newest-first); `?page_size=` (1–100, default 10) and `?after=<cursor>` query params; response includes a `next` URL ready to follow
+- **Barcode uniqueness** — Enforced at the MongoDB index level (sparse unique index) and validated in the service layer
+- **Soft delete** — Deleted products are flagged with `is_deleted: true` in MongoDB and hidden from all queries
+- **Low-stock warnings** — Automatic `WARNING` log emitted whenever a product's quantity is at or below its `minimum_stock_level`
+- **Input validation** — Price, quantity, minimum stock level, MongoDB ObjectId, and pagination parameters
 - **Custom error handling** — Structured JSON error responses with appropriate HTTP status codes
+- **Request ID tracing** — `RequestIDMiddleware` injects a UUID `X-Request-ID` header into every request and response; the ID propagates through all structured log entries
+- **Structured JSON logging** — All log lines are ECS-compatible JSON (Elastic Common Schema), written to a rotating `inventory.log` file
+- **ELK stack observability** — Filebeat ships logs to Elasticsearch; Kibana provides dashboards and search (all via Docker Compose)
+- **MongoDB persistence** — Data stored in MongoDB 8.0 via `MongoProductRepository`; swapping to another database only requires a new adapter
 - **Hexagonal architecture** — Clean separation of concerns for testability and maintainability
 
 ---
@@ -158,9 +180,12 @@ At no point does the domain or service layer know it's using an in-memory dict. 
 | Language | Python 3.12+ |
 | Web Framework | Django 6.0.2 |
 | API Framework | Django REST Framework |
-| Data Storage | In-memory (Python dict) — swappable to MongoDB/PostgreSQL |
-| Database (planned) | MongoDB 8.0 (via Docker Compose) |
-| Containerization | Docker & Docker Compose |
+| Data Storage | MongoDB 8.0 (`MongoProductRepository`) |
+| Logging | Python `logging` + custom `JSONFormatter` (ECS-compatible) |
+| Log Shipping | Filebeat 8.13.4 |
+| Log Indexing | Elasticsearch 8.13.4 |
+| Log Visualisation | Kibana 8.13.4 |
+| Containerisation | Docker & Docker Compose |
 
 ---
 
@@ -168,11 +193,11 @@ At no point does the domain or service layer know it's using an in-memory dict. 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/inventory/products/create/` | Create a new product |
-| `GET` | `/inventory/products/detail/?id=<id>` | Get a product by ID |
-| `GET` | `/inventory/products/` | List products (supports `?category=`, `?search=`, `?page=`, `?page_size=`) |
-| `PUT/PATCH` | `/inventory/products/update/?id=<id>` | Update a product |
-| `DELETE` | `/inventory/products/delete/?id=<id>` | Delete a product |
+| `POST` | `/inventory/products/` | Create a new product |
+| `GET` | `/inventory/products/` | List products (supports `?category=`, `?search=`, `?page_size=`, `?after=`) |
+| `GET` | `/inventory/products/<id>/` | Get a product by MongoDB ObjectId |
+| `PUT/PATCH` | `/inventory/products/<id>/` | Update a product (full or partial) |
+| `DELETE` | `/inventory/products/<id>/` | Delete a product (soft delete) |
 
 > For full request/response examples, see [API_DOCUMENTATION.md](./API_DOCUMENTATION.md).
 
@@ -182,9 +207,9 @@ At no point does the domain or service layer know it's using an in-memory dict. 
 
 ### Prerequisites
 
-- **Python 3.12+** (3.14 recommended)
+- **Python 3.12+**
 - **pip** (Python package manager)
-- **Docker & Docker Compose** (optional, for MongoDB)
+- **Docker & Docker Compose** (required for MongoDB + ELK stack)
 
 ### Installation
 
@@ -216,20 +241,99 @@ At no point does the domain or service layer know it's using an in-memory dict. 
 
 ### Running the Server
 
+Start the full infrastructure stack first (MongoDB + ELK):
+```bash
+docker-compose up -d
+```
+
+Then start the Django development server:
 ```bash
 python manage.py runserver
 ```
 
 The API will be available at **http://localhost:8000/inventory/**.
 
-### Running with Docker
+### Running with Docker (Full Stack)
 
-Start MongoDB (for future use when a MongoDB adapter is added):
+`docker-compose up -d` starts the following services:
+
+| Service | Description | Port |
+|---------|-------------|------|
+| `mongodb` | MongoDB 8.0 — primary data store | `27019` (host) → `27017` (container) |
+| `elasticsearch` | Elasticsearch 8.13.4 — log index | `9200` |
+| `kibana` | Kibana 8.13.4 — log visualisation UI | `5601` |
+| `filebeat-setup` | One-shot container: sets up Filebeat index templates | — |
+| `filebeat` | Filebeat 8.13.4 — tails `inventory.log` and ships to Elasticsearch | — |
+
+**MongoDB connection** (default, overridable via environment variables):
+- URI: `mongodb://root:example@localhost:27019/`
+- Database: `inventory_db`
+
+Override via environment variables before starting the server:
 ```bash
-docker-compose up -d
+export MONGO_URI="mongodb://root:example@localhost:27019/"
+export MONGO_DB_NAME="inventory_db"
 ```
 
-This starts a MongoDB 8.0 instance on port **27019** with credentials `root` / `example`.
+---
+
+## Observability: ELK Stack Logging
+
+### Logging Architecture
+
+```
+Django App
+    │
+    │  Python logging (JSONFormatter → ECS-compatible JSON)
+    ▼
+inventory.log  (rotating file, up to 5 MB × 3 backups)
+    │
+    │  Filebeat tails the file
+    ▼
+Elasticsearch 8.13.4
+    │
+    │  Kibana queries
+    ▼
+Kibana 8.13.4  →  http://localhost:5601
+```
+
+### Log Format
+
+Every log line is a single JSON object. Example:
+
+```json
+{
+  "@timestamp": "2026-02-26T10:15:30.123Z",
+  "log": { "level": "INFO", "logger": "inventory.views" },
+  "level": "INFO",
+  "logger": "inventory.views",
+  "request_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "message": "HTTP 201 - product created",
+  "service": { "name": "inventory-api" },
+  "labels": {
+    "product_id": "65f1a2b3c4d5e6f7a8b9c0d1"
+  }
+}
+```
+
+Key fields:
+| Field | Description |
+|-------|-------------|
+| `@timestamp` | ISO 8601 UTC timestamp (millisecond precision) |
+| `request_id` | UUID injected by `RequestIDMiddleware`; echoed in `X-Request-ID` response header |
+| `level` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `logger` | Python logger name (e.g. `inventory.views`, `inventory.services.product_service`) |
+| `message` | Human-readable event description |
+| `labels` | Arbitrary structured context (product ID, barcode, error message, etc.) |
+| `exception` | Formatted traceback (only present on `ERROR`/`CRITICAL` with `exc_info=True`) |
+
+### Viewing Logs in Kibana
+
+1. Ensure the full stack is running: `docker-compose up -d`
+2. Open **http://localhost:5601** in your browser
+3. Navigate to **Discover** — logs are indexed under `filebeat-*`
+4. Filter by `request_id` to trace a single HTTP request end-to-end
+5. Filter by `level: WARNING` to see all low-stock alerts
 
 ---
 

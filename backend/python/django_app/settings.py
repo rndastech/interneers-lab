@@ -10,10 +10,12 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+LOG_DIR = Path(os.environ.get("LOG_DIR", BASE_DIR))
 
 
 # Quick-start development settings - unsuitable for production
@@ -42,6 +44,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "inventory.middleware.request_id.RequestIDMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -81,6 +84,10 @@ DATABASES = {
         "NAME": BASE_DIR / "db.sqlite3",
     }
 }
+
+# MongoDB Configuration
+MONGO_URI = os.environ.get("MONGO_URI", "mongodb://root:example@localhost:27019/")
+MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "inventory_db")
 
 
 # Password validation
@@ -133,5 +140,50 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,
+}
 
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+
+    'filters': {
+        'request_context': {
+            '()': 'inventory.adapters.python_logger.RequestContextFilter',
+        },
+    },
+
+    'formatters': {
+        'ecs': {
+            '()': 'ecs_logging.StdlibFormatter',
+        },
+    },
+
+    'handlers': {
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOG_DIR / 'inventory.log',
+            'maxBytes': 1024 * 1024 * 5,
+            'backupCount': 3,
+            'formatter': 'ecs',
+            'filters': ['request_context'],
+        },
+    },
+
+    'loggers': {
+        'inventory': {
+            'handlers': ['file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+    'root': {
+        'handlers': ['file'],
+        'level': 'WARNING',
+    },
 }

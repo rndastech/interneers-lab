@@ -4,29 +4,25 @@ from typing import Optional
 class ProductRepository(ABC):
 
     @abstractmethod
-    def next_id(self) -> int:
-        raise NotImplementedError
-
-    @abstractmethod
     def add(self, product: dict) -> dict:
         raise NotImplementedError
 
     @abstractmethod
-    def get_by_id(self, product_id: int) -> Optional[dict]:
+    def get_by_id(self, product_id: str) -> Optional[dict]:
         raise NotImplementedError
 
     @abstractmethod
-    def list_all(self) -> list:
+    def list_paginated( self, page_size: int, after: Optional[str] = None, category: Optional[str] = None, search: Optional[str] = None,) -> dict:
         raise NotImplementedError
 
     @abstractmethod
-    def update(self, product_id: int, product: dict) -> dict:
+    def update(self, product_id: str, changes: dict) -> Optional[dict]:
         raise NotImplementedError
 
     @abstractmethod
-    def delete(self, product_id: int) -> None:
+    def delete(self, product_id: str) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def barcode_exists(self, barcode: str, exclude_id: Optional[int] = None) -> bool:
+    def barcode_exists(self, barcode: str, exclude_id: Optional[str] = None) -> bool:
         raise NotImplementedError
