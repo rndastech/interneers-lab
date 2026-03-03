@@ -1,4 +1,7 @@
-from datetime import datetime
+﻿from datetime import datetime
+from typing import Optional
+import csv
+import codecs
 from inventory.domain.product import Product
 from inventory.domain.validators import (
     validate_required_fields,
@@ -7,9 +10,13 @@ from inventory.domain.validators import (
     validate_product_id,
     validate_minimum_stock_level,
     validate_cursor_pagination,
+    validate_csv_create,
+    validate_csv_update,
+    validate_csv_delete,
 )
 from inventory.domain.exceptions import NotFoundError, DuplicateError, ValidationError
-from inventory.ports.repository import ProductRepository
+from inventory.ports.product_repository import ProductRepository
+from inventory.ports.category_repository import CategoryRepository
 from inventory.ports.logger import ProductLogger
 from inventory.domain.config import (
     REQUIRED_CREATE_FIELDS,
@@ -19,13 +26,28 @@ from inventory.domain.config import (
     DEFAULT_BARCODE,
     DEFAULT_CATEGORY,
     DEFAULT_BRAND,
+    PRODUCT_NOT_FOUND_MESSAGE,
+    CATEGORY_NOT_FOUND_MESSAGE,
+    CSV_ALLOWED_COLUMNS,
+    CSV_UPDATE_ALLOWED_COLUMNS,
+    CSV_NO_FILE_MESSAGE,
+    CSV_INVALID_FORMAT_MESSAGE,
 )
 
 class ProductService:
 
-    def __init__(self, repository: ProductRepository, logger: ProductLogger):
+    def __init__(self, repository: ProductRepository, logger: ProductLogger, category_repository: Optional[CategoryRepository] = None):
         self._repo = repository
         self._logger = logger
+        self._category_repo = category_repository
+
+    def validate_category_exists(self, category: str) -> None:
+        if not category or self._category_repo is None:
+            return
+        normalised = category.strip().lower()
+        if not self._category_repo.title_exists(normalised):
+            self._logger.error('Category not found', category=normalised)
+            raise NotFoundError(f"Category '{normalised}' {CATEGORY_NOT_FOUND_MESSAGE.lower()}")
 
     def validate_barcode_uniqueness(self, barcode, exclude_id=None):
         if barcode and self._repo.barcode_exists(barcode, exclude_id=exclude_id):
@@ -59,12 +81,17 @@ class ProductService:
         if 'minimum_stock_level' in data:
             minimum_stock_level = validate_minimum_stock_level(data['minimum_stock_level'])
 
+        category = data.get('category', DEFAULT_CATEGORY)
+        if category:
+            category = category.strip().lower()
+            self.validate_category_exists(category)
+
         now = datetime.now().isoformat()
         product = Product(
             name=data['name'],
             description=data.get('description', DEFAULT_DESCRIPTION),
             barcode=data.get('barcode', DEFAULT_BARCODE),
-            category=data.get('category', DEFAULT_CATEGORY),
+            category=category,
             brand=data.get('brand', DEFAULT_BRAND),
             price=price,
             quantity=quantity,
@@ -88,15 +115,15 @@ class ProductService:
         product = self._repo.get_by_id(product_id)
         if product is None:
             self._logger.error('Product not found', product_id=product_id)
-            raise NotFoundError()
+            raise NotFoundError(PRODUCT_NOT_FOUND_MESSAGE)
 
         self._logger.info('Product retrieved', product_id=product_id)
         return product
 
-    def list_products(self, category=None, search=None, raw_page_size=None, raw_after=None) -> dict:
+    def list_products(self, categories=None, search=None, raw_page_size=None, raw_after=None) -> dict:
         self._logger.debug(
             'list_products called',
-            category=category,
+            categories=categories,
             search=search,
             raw_page_size=raw_page_size,
             raw_after=raw_after,
@@ -106,7 +133,7 @@ class ProductService:
         result = self._repo.list_paginated(
             page_size=page_size,
             after=after,
-            category=category,
+            categories=categories,
             search=search,
         )
 
@@ -130,10 +157,14 @@ class ProductService:
         product = self._repo.get_by_id(product_id)
         if product is None:
             self._logger.error('Product not found for update', product_id=product_id)
-            raise NotFoundError()
+            raise NotFoundError(PRODUCT_NOT_FOUND_MESSAGE)
 
         if 'barcode' in data and data['barcode'] != product.get('barcode'):
             self.validate_barcode_uniqueness(data['barcode'], exclude_id=product_id)
+
+        if 'category' in data and data['category']:
+            data['category'] = data['category'].strip().lower()
+            self.validate_category_exists(data['category'])
 
         if 'price' in data:
             price = validate_price(data['price'])
@@ -154,7 +185,7 @@ class ProductService:
         saved = self._repo.update(product_id, changes)
         if saved is None:
             self._logger.error('Concurrent delete', product_id=product_id)
-            raise NotFoundError()
+            raise NotFoundError(PRODUCT_NOT_FOUND_MESSAGE)
         self._logger.info(
             'Product updated successfully',
             product_id=product_id,
@@ -170,7 +201,153 @@ class ProductService:
         product = self._repo.get_by_id(product_id)
         if product is None:
             self._logger.error('Product not found for deletion', product_id=product_id)
-            raise NotFoundError()
+            raise NotFoundError(PRODUCT_NOT_FOUND_MESSAGE)
 
         self._repo.delete(product_id)
         self._logger.info('Product deleted', product_id=product_id)
+
+    def parse_csv(self, file_obj) -> list[dict]:
+        if file_obj is None:
+            self._logger.error('No CSV file provided')
+            raise ValidationError(CSV_NO_FILE_MESSAGE)
+        try:
+            reader = csv.DictReader(codecs.iterdecode(file_obj, 'utf-8-sig'))
+            rows = list(reader)
+        except (UnicodeDecodeError, csv.Error) as exc:
+            self._logger.error('CSV file could not be parsed', error=str(exc))
+            raise ValidationError(f'{CSV_INVALID_FORMAT_MESSAGE}: {exc}')
+        return rows
+
+    def create_product_csv(self, file_obj) -> dict:
+        self._logger.debug('create_product_csv called')
+        rows = self.parse_csv(file_obj)
+        validate_csv_create(rows)
+        self._logger.info('create_product_csv parsed', total_rows=len(rows))
+        created = []
+        errors = []
+        for row_index, raw_row in enumerate(rows, start=1):
+            row = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw_row.items()}
+            row = {k: v for k, v in row.items() if k in CSV_ALLOWED_COLUMNS}
+
+            self._logger.debug(
+                'Processing CSV create row',
+                row_number=row_index,
+                row_keys=list(row.keys()),
+            )
+
+            try:
+                product = self.create_product(row)
+                created.append(product)
+                self._logger.info(
+                    'CSV row created successfully',
+                    row_number=row_index,
+                    product_id=product['id'],
+                )
+            except (ValidationError, NotFoundError, DuplicateError) as exc:
+                self._logger.warning(
+                    'CSV create row skipped due to error',
+                    row_number=row_index,
+                    error=exc.message,
+                )
+                errors.append({'row': row_index, 'data': raw_row, 'error': exc.message})
+
+        self._logger.info(
+            'create_product_csv complete',
+            total_rows=len(rows),
+            created_count=len(created),
+            error_count=len(errors),
+        )
+        return {'created': created, 'errors': errors}
+
+    def update_product_csv(self, file_obj) -> dict:
+        self._logger.debug('update_product_csv called')
+
+        rows = self.parse_csv(file_obj)
+        validate_csv_update(rows)
+
+        self._logger.info('update_product_csv parsed', total_rows=len(rows))
+
+        updated = []
+        errors = []
+
+        for row_index, raw_row in enumerate(rows, start=1):
+            row = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw_row.items()}
+            row = {k: v for k, v in row.items() if k in CSV_UPDATE_ALLOWED_COLUMNS}
+
+            self._logger.debug(
+                'Processing CSV update row',
+                row_number=row_index,
+                row_keys=list(row.keys()),
+            )
+
+            try:
+                raw_id = row.pop('id', None)
+                if not row:
+                    raise ValidationError('Row must contain at least one field to update besides id')
+                product = self.update_product(raw_id, row)
+                updated.append(product)
+                self._logger.info(
+                    'CSV row updated successfully',
+                    row_number=row_index,
+                    product_id=product['id'],
+                )
+            except (ValidationError, NotFoundError, DuplicateError) as exc:
+                self._logger.warning(
+                    'CSV update row skipped due to error',
+                    row_number=row_index,
+                    error=exc.message,
+                )
+                errors.append({'row': row_index, 'data': raw_row, 'error': exc.message})
+
+        self._logger.info(
+            'update_product_csv complete',
+            total_rows=len(rows),
+            updated_count=len(updated),
+            error_count=len(errors),
+        )
+        return {'updated': updated, 'errors': errors}
+
+    def delete_product_csv(self, file_obj) -> dict:
+        self._logger.debug('delete_product_csv called')
+
+        rows = self.parse_csv(file_obj)
+        validate_csv_delete(rows)
+
+        self._logger.info('delete_product_csv parsed', total_rows=len(rows))
+
+        deleted = []
+        errors = []
+
+        for row_index, raw_row in enumerate(rows, start=1):
+            row = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw_row.items()}
+            raw_id = row.get('id')
+
+            self._logger.debug(
+                'Processing CSV delete row',
+                row_number=row_index,
+                raw_id=raw_id,
+            )
+
+            try:
+                self.delete_product(raw_id)
+                deleted.append(str(raw_id))
+                self._logger.info(
+                    'CSV row deleted successfully',
+                    row_number=row_index,
+                    product_id=raw_id,
+                )
+            except (ValidationError, NotFoundError) as exc:
+                self._logger.warning(
+                    'CSV delete row skipped due to error',
+                    row_number=row_index,
+                    error=exc.message,
+                )
+                errors.append({'row': row_index, 'data': raw_row, 'error': exc.message})
+
+        self._logger.info(
+            'delete_product_csv complete',
+            total_rows=len(rows),
+            deleted_count=len(deleted),
+            error_count=len(errors),
+        )
+        return {'deleted': deleted, 'errors': errors}
