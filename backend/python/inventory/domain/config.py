@@ -6,7 +6,7 @@ DEFAULT_CATEGORY = ''
 DEFAULT_BRAND = ''
 
 # Required/allowed fields
-REQUIRED_CREATE_FIELDS = ['name', 'price', 'quantity', 'brand']
+REQUIRED_CREATE_FIELDS = ['name', 'price', 'quantity', 'brand', 'category']
 ALLOWED_UPDATE_FIELDS = [
     'name', 'description', 'barcode', 'category', 'brand',
     'price', 'quantity', 'minimum_stock_level',

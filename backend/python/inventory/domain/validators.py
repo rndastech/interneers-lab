@@ -18,7 +18,10 @@ from inventory.domain.config import (
 
 
 def validate_required_fields(data, required_fields):
-    missing_fields = [field for field in required_fields if field not in data]
+    missing_fields = [
+        field for field in required_fields
+        if field not in data or str(data[field]).strip() == ''
+    ]
     if missing_fields:
         raise ValidationError(f'Missing required fields: {", ".join(missing_fields)}')
 
