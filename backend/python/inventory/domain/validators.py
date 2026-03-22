@@ -116,3 +116,13 @@ def validate_csv_update(rows: list) -> None:
 
 def validate_csv_delete(rows: list) -> None:
     check_csv_rows(rows, CSV_DELETE_REQUIRED_COLUMNS)
+
+
+def validate_generate_quantity(raw_quantity):
+    try:
+        quantity = int(raw_quantity)
+        if quantity <= 0 or quantity > 50:
+            raise ValidationError('Quantity must be between 1 and 50')
+        return quantity
+    except (ValueError, TypeError):
+        raise ValidationError('Invalid quantity format')

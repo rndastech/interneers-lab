@@ -5,6 +5,8 @@ from .views import (
     products_csv,
     categories_list_create,
     category_detail_update_delete,
+    ai_text,
+    ai_product,
 )
 
 urlpatterns = [
@@ -13,4 +15,6 @@ urlpatterns = [
     path('products/<str:product_id>/', product_detail_update_delete, name='product-detail'),
     path('categories/', categories_list_create, name='category-list-create'),
     path('categories/<str:category_id>/', category_detail_update_delete, name='category-detail'),
+    path('ai/prompt/', ai_text, name='text-generate'),
+    path('ai/product/', ai_product, name='product-generate'),
 ]

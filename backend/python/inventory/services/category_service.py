@@ -1,4 +1,6 @@
 from datetime import datetime
+import random
+from typing import List
 from inventory.domain.category import Category
 from inventory.domain.validators import (
     validate_category_id,
@@ -131,3 +133,39 @@ class CategoryService:
 
         self._repo.delete(category_id)
         self._logger.info('Category deleted', category_id=category_id)
+
+    def validate_and_filter_categories(self, category_input: str) -> List[str]:
+        if not category_input or not category_input.strip():
+            return []
+        raw_categories = [cat.strip() for cat in category_input.split(',')]
+        valid_categories = []
+        for category_name in raw_categories:
+            if not category_name:
+                continue
+            if self._repo.title_exists(category_name):
+                valid_categories.append(category_name)
+                self._logger.debug(f"Category validated: {category_name}")
+            else:
+                self._logger.warning(f"Invalid category removed from request: {category_name}")
+        
+        return valid_categories
+
+    def select_random_categories(self) -> List[str]:
+        try:
+            result = self._repo.list_paginated(page_size=1000, after=None, search=None)
+            all_categories = result.get('results', [])
+            if not all_categories:
+                self._logger.warning("No categories found in database")
+                return []
+            num_to_select = min(10, len(all_categories))
+            selected = random.sample(all_categories, num_to_select)
+            category_names = [cat['title'] for cat in selected]
+            
+            self._logger.info(
+                f"Selected {len(category_names)} random categories",
+                categories=category_names,
+            )
+            return category_names
+        except Exception as e:
+            self._logger.error(f"Failed to select random categories: {str(e)}", exc_info=True)
+            return []

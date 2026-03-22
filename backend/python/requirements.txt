@@ -3,3 +3,6 @@ pymongo==4.16.0
 djangorestframework
 django-filter
 ecs-logging
+google-genai
+python-dotenv
+
