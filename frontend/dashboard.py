@@ -134,7 +134,7 @@ if section == NAV_LIST:
         if search:
             mask = (
                 df["name"].str.contains(search, case=False, na=False)
-                | df["barcode"].str.contains(search, case=False, na=False)
+                | (df["barcode"].str.contains(search, case=False, na=False) if "barcode" in df.columns else False)
                 | df["description"].str.contains(search, case=False, na=False)
             )
             df = df[mask]
@@ -499,8 +499,9 @@ elif section == NAV_SCENARIOS:
                     st.subheader("Created Products")
                     products_df = pd.DataFrame(data.get("products", []))
                     if not products_df.empty:
+                        available_cols = [col for col in DISPLAY_COLUMNS if col in products_df.columns]
                         st.dataframe(
-                            products_df[DISPLAY_COLUMNS],
+                            products_df[available_cols],
                             use_container_width=True,
                             hide_index=True
                         )
