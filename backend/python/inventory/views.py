@@ -7,12 +7,15 @@ from inventory.domain.exceptions import ValidationError, NotFoundError, Duplicat
 from inventory.adapters.product_repository import product_repository
 from inventory.adapters.category_repository import category_repository
 from inventory.adapters.python_logger import PythonProductLogger
+from inventory.adapters.google_genai_provider import get_google_genai_provider
 from inventory.services.product_service import ProductService
 from inventory.services.category_service import CategoryService
+from inventory.services.ai_service import AIService
 
 logger = PythonProductLogger("inventory.views")
 service = ProductService(product_repository, logger, category_repository)
 category_service = CategoryService(category_repository, logger)
+ai_service = AIService(get_google_genai_provider(), logger, product_repository, category_service, service)
 
 INTERNAL_SERVER_ERROR_MESSAGE = 'An unexpected internal error occurred'
 
@@ -399,3 +402,37 @@ def category_detail_update_delete(request, category_id):
     if request.method in ('PUT', 'PATCH'):
         return update_category(request, category_id)
     return delete_category(category_id)
+
+def text_generate(request):
+    logger.info('HTTP POST /ai/ - text_generate received')
+    try:
+        response = ai_service.generate_text(request.data)
+        logger.info('HTTP 200 - AI request processed successfully')
+        return Response(response)
+    except ValidationError as e:
+        logger.error('HTTP 400 - validation error on AI request', error=e.message)
+        return Response({'error': e.message}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        logger.critical('HTTP 500 - unexpected error on AI request', exc_info=True)
+        return Response({'error': INTERNAL_SERVER_ERROR_MESSAGE}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def product_generate(request):
+    logger.info('HTTP POST /ai/product/ - product_generate received')
+    try:
+        response = ai_service.generate_products(request.data)
+        logger.info('HTTP 200 - AI product request processed successfully')
+        return Response(response)
+    except ValidationError as e:
+        logger.error('HTTP 400 - validation error on AI product request', error=e.message)
+        return Response({'error': e.message}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        logger.critical('HTTP 500 - unexpected error on AI product request', exc_info=True)
+        return Response({'error': INTERNAL_SERVER_ERROR_MESSAGE}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+def ai_text(request):
+    return text_generate(request)
+
+@api_view(['POST'])
+def ai_product(request):
+    return product_generate(request)

@@ -49,15 +49,6 @@ class ProductService:
             self._logger.error('Category not found', category=normalised)
             raise NotFoundError(f"Category '{normalised}' {CATEGORY_NOT_FOUND_MESSAGE.lower()}")
 
-    def validate_barcode_uniqueness(self, barcode, exclude_id=None):
-        if barcode and self._repo.barcode_exists(barcode, exclude_id=exclude_id):
-            self._logger.error(
-                'Duplicate barcode rejected',
-                barcode=barcode,
-                exclude_id=exclude_id,
-            )
-            raise DuplicateError('Product with this barcode already exists')
-
     def low_stock_check(self, product: dict) -> None:
         quantity = product.get('quantity', 0)
         minimum = product.get('minimum_stock_level', 0)
@@ -69,14 +60,10 @@ class ProductService:
                 minimum_stock_level=minimum,
             )
 
-    def create_product(self, data: dict) -> dict:
-        self._logger.debug('create_product called', incoming_fields=list(data.keys()))
-
+    def build_product_doc(self, data: dict) -> dict:
         validate_required_fields(data, REQUIRED_CREATE_FIELDS)
         price = validate_price(data['price'])
         quantity = validate_quantity(data.get('quantity'))
-        if 'barcode' in data:
-            self.validate_barcode_uniqueness(data['barcode'])
         minimum_stock_level = DEFAULT_MINIMUM_STOCK_LEVEL
         if 'minimum_stock_level' in data:
             minimum_stock_level = validate_minimum_stock_level(data['minimum_stock_level'])
@@ -99,12 +86,30 @@ class ProductService:
             created_at=now,
             updated_at=now,
         )
-        saved = self._repo.add(product.to_dict())
+        return product.to_dict()
 
-        self._logger.info(
-            'Product created successfully',
-            product_id=saved['id'],
-        )
+    def build_update_changes(self, data: dict) -> dict:
+        changes = {}
+        if 'category' in data and data['category']:
+            data['category'] = data['category'].strip().lower()
+            self.validate_category_exists(data['category'])
+        if 'price' in data:
+            changes['price'] = validate_price(data['price'])
+        if 'quantity' in data:
+            changes['quantity'] = validate_quantity(data['quantity'])
+        if 'minimum_stock_level' in data:
+            changes['minimum_stock_level'] = validate_minimum_stock_level(data['minimum_stock_level'])
+        for field in ALLOWED_UPDATE_FIELDS:
+            if field in data and field not in changes:
+                changes[field] = data[field]
+        changes['updated_at'] = datetime.now().isoformat()
+        return changes
+
+    def create_product(self, data: dict) -> dict:
+        self._logger.debug('create_product called', incoming_fields=list(data.keys()))
+        doc = self.build_product_doc(data)
+        saved = self._repo.add(doc)
+        self._logger.info('Product created successfully', product_id=saved['id'])
         self.low_stock_check(saved)
         return saved
 
@@ -154,34 +159,8 @@ class ProductService:
         )
 
         product_id = validate_product_id(raw_id)
-        product = self._repo.get_by_id(product_id)
-        if product is None:
-            self._logger.error('Product not found for update', product_id=product_id)
-            raise NotFoundError(PRODUCT_NOT_FOUND_MESSAGE)
-
-        if 'barcode' in data and data['barcode'] != product.get('barcode'):
-            self.validate_barcode_uniqueness(data['barcode'], exclude_id=product_id)
-
-        if 'category' in data and data['category']:
-            data['category'] = data['category'].strip().lower()
-            self.validate_category_exists(data['category'])
-
-        if 'price' in data:
-            price = validate_price(data['price'])
-            data['price'] = price
-        if 'quantity' in data:
-            data['quantity'] = validate_quantity(data['quantity'])
-        if 'minimum_stock_level' in data:
-            data['minimum_stock_level'] = validate_minimum_stock_level(data['minimum_stock_level'])
-
-        updated_fields = [field for field in ALLOWED_UPDATE_FIELDS if field in data]
-        self._logger.debug(
-            'Applying field updates',
-            product_id=product_id,
-            updated_fields=updated_fields,
-        )
-        changes = {field: data[field] for field in ALLOWED_UPDATE_FIELDS if field in data}
-        changes['updated_at'] = datetime.now().isoformat()
+        changes = self.build_update_changes(data)
+        self._logger.debug('Applying field updates', product_id=product_id, updated_fields=list(changes.keys()))
         saved = self._repo.update(product_id, changes)
         if saved is None:
             self._logger.error('Concurrent delete', product_id=product_id)
@@ -189,8 +168,8 @@ class ProductService:
         self._logger.info(
             'Product updated successfully',
             product_id=product_id,
-            updated_fields=updated_fields,
-        )
+            updated_fields=list(changes.keys())
+            )
         self.low_stock_check(saved)
         return saved
 
@@ -223,41 +202,40 @@ class ProductService:
         rows = self.parse_csv(file_obj)
         validate_csv_create(rows)
         self._logger.info('create_product_csv parsed', total_rows=len(rows))
-        created = []
-        errors = []
+        valid_docs: list[dict] = [] 
+        valid_row_indices: list[int] = []
+        errors: list[dict] = []
+
         for row_index, raw_row in enumerate(rows, start=1):
             row = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw_row.items()}
             row = {k: v for k, v in row.items() if k in CSV_ALLOWED_COLUMNS}
-
-            self._logger.debug(
-                'Processing CSV create row',
-                row_number=row_index,
-                row_keys=list(row.keys()),
-            )
-
+            self._logger.debug('Validating CSV create row', row_number=row_index, row_keys=list(row.keys()))
             try:
-                product = self.create_product(row)
-                created.append(product)
-                self._logger.info(
-                    'CSV row created successfully',
-                    row_number=row_index,
-                    product_id=product['id'],
-                )
+                doc = self.build_product_doc(row)
+                valid_docs.append(doc)
+                valid_row_indices.append(row_index)
             except (ValidationError, NotFoundError, DuplicateError) as exc:
-                self._logger.warning(
-                    'CSV create row skipped due to error',
-                    row_number=row_index,
-                    error=exc.message,
-                )
+                self._logger.warning('CSV create row invalid', row_number=row_index, error=exc.message)
                 errors.append({'row': row_index, 'data': raw_row, 'error': exc.message})
+
+        saved, repo_errors = self._repo.add_many(valid_docs)
+
+        for doc_index, message in repo_errors:
+            original_row = valid_row_indices[doc_index]
+            self._logger.warning('CSV create row rejected by DB', row_number=original_row, error=message)
+            errors.append({'row': original_row, 'data': rows[original_row - 1], 'error': message})
+
+        for product in saved:
+            self._logger.info('CSV row created successfully', product_id=product['id'])
+            self.low_stock_check(product)
 
         self._logger.info(
             'create_product_csv complete',
             total_rows=len(rows),
-            created_count=len(created),
+            created_count=len(saved),
             error_count=len(errors),
         )
-        return {'created': created, 'errors': errors}
+        return {'created': saved, 'errors': errors}
 
     def update_product_csv(self, file_obj) -> dict:
         self._logger.debug('update_product_csv called')
@@ -267,37 +245,36 @@ class ProductService:
 
         self._logger.info('update_product_csv parsed', total_rows=len(rows))
 
-        updated = []
-        errors = []
+        valid_updates: list[tuple[str, dict]] = []
+        valid_row_indices: list[int] = []
+        errors: list[dict] = []
 
         for row_index, raw_row in enumerate(rows, start=1):
             row = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw_row.items()}
             row = {k: v for k, v in row.items() if k in CSV_UPDATE_ALLOWED_COLUMNS}
-
-            self._logger.debug(
-                'Processing CSV update row',
-                row_number=row_index,
-                row_keys=list(row.keys()),
-            )
-
+            self._logger.debug('Validating CSV update row', row_number=row_index, row_keys=list(row.keys()))
             try:
                 raw_id = row.pop('id', None)
+                product_id = validate_product_id(raw_id)
                 if not row:
                     raise ValidationError('Row must contain at least one field to update besides id')
-                product = self.update_product(raw_id, row)
-                updated.append(product)
-                self._logger.info(
-                    'CSV row updated successfully',
-                    row_number=row_index,
-                    product_id=product['id'],
-                )
+                changes = self.build_update_changes(row)
+                valid_updates.append((product_id, changes))
+                valid_row_indices.append(row_index)
             except (ValidationError, NotFoundError, DuplicateError) as exc:
-                self._logger.warning(
-                    'CSV update row skipped due to error',
-                    row_number=row_index,
-                    error=exc.message,
-                )
+                self._logger.warning('CSV update row invalid', row_number=row_index, error=exc.message)
                 errors.append({'row': row_index, 'data': raw_row, 'error': exc.message})
+
+        updated, repo_errors = self._repo.update_many(valid_updates)
+
+        for doc_index, message in repo_errors:
+            original_row = valid_row_indices[doc_index]
+            self._logger.warning('CSV update row rejected by DB', row_number=original_row, error=message)
+            errors.append({'row': original_row, 'data': rows[original_row - 1], 'error': message})
+
+        for product in updated:
+            self._logger.info('CSV row updated successfully', product_id=product['id'])
+            self.low_stock_check(product)
 
         self._logger.info(
             'update_product_csv complete',
@@ -315,39 +292,41 @@ class ProductService:
 
         self._logger.info('delete_product_csv parsed', total_rows=len(rows))
 
-        deleted = []
-        errors = []
+        candidate_ids: list[str] = []
+        candidate_row_indices: list[int] = []
+        errors: list[dict] = []
 
         for row_index, raw_row in enumerate(rows, start=1):
             row = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw_row.items()}
             raw_id = row.get('id')
-
-            self._logger.debug(
-                'Processing CSV delete row',
-                row_number=row_index,
-                raw_id=raw_id,
-            )
-
+            self._logger.debug('Validating CSV delete row', row_number=row_index, raw_id=raw_id)
             try:
-                self.delete_product(raw_id)
-                deleted.append(str(raw_id))
-                self._logger.info(
-                    'CSV row deleted successfully',
-                    row_number=row_index,
-                    product_id=raw_id,
-                )
-            except (ValidationError, NotFoundError) as exc:
-                self._logger.warning(
-                    'CSV delete row skipped due to error',
-                    row_number=row_index,
-                    error=exc.message,
-                )
+                product_id = validate_product_id(raw_id)
+                candidate_ids.append(product_id)
+                candidate_row_indices.append(row_index)
+            except ValidationError as exc:
+                self._logger.warning('CSV delete row invalid', row_number=row_index, error=exc.message)
                 errors.append({'row': row_index, 'data': raw_row, 'error': exc.message})
+
+        existing = self._repo.get_many_by_ids(candidate_ids)
+
+        ids_to_delete: list[str] = []
+        for pid, row_index in zip(candidate_ids, candidate_row_indices):
+            if pid in existing:
+                ids_to_delete.append(pid)
+            else:
+                raw_row = rows[row_index - 1]
+                self._logger.warning('CSV delete row not found', row_number=row_index, product_id=pid)
+                errors.append({'row': row_index, 'data': raw_row, 'error': PRODUCT_NOT_FOUND_MESSAGE})
+        self._repo.delete_many(ids_to_delete)
+
+        for pid in ids_to_delete:
+            self._logger.info('CSV row deleted successfully', product_id=pid)
 
         self._logger.info(
             'delete_product_csv complete',
             total_rows=len(rows),
-            deleted_count=len(deleted),
+            deleted_count=len(ids_to_delete),
             error_count=len(errors),
         )
-        return {'deleted': deleted, 'errors': errors}
+        return {'deleted': ids_to_delete, 'errors': errors}
