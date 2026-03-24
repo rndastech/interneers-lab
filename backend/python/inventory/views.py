@@ -428,7 +428,20 @@ def product_generate(request):
     except Exception:
         logger.critical('HTTP 500 - unexpected error on AI product request', exc_info=True)
         return Response({'error': INTERNAL_SERVER_ERROR_MESSAGE}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+    
+def scenario_products(request):
+    logger.info('HTTP POST /ai/scenarios/ - ai_scenarios received', scenario=request.data.get('scenario'))
+    try:
+        response = ai_service.generate_scenario_products(request.data)
+        logger.info('HTTP 201 - AI scenario request processed successfully', scenario=request.data.get('scenario'))
+        return Response(response, status=status.HTTP_201_CREATED)
+    except ValidationError as e:
+        logger.error('HTTP 400 - validation error on AI scenario request', error=e.message)
+        return Response({'error': e.message}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        logger.critical('HTTP 500 - unexpected error on AI scenario request', exc_info=True)
+        return Response({'error': INTERNAL_SERVER_ERROR_MESSAGE}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
 @api_view(['GET'])
 def ai_text(request):
     return text_generate(request)
@@ -436,3 +449,7 @@ def ai_text(request):
 @api_view(['POST'])
 def ai_product(request):
     return product_generate(request)
+
+@api_view(['POST'])
+def ai_scenarios(request):
+    return scenario_products(request)

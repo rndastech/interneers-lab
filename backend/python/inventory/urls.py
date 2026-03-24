@@ -7,6 +7,7 @@ from .views import (
     category_detail_update_delete,
     ai_text,
     ai_product,
+    ai_scenarios,
 )
 
 urlpatterns = [
@@ -17,4 +18,5 @@ urlpatterns = [
     path('categories/<str:category_id>/', category_detail_update_delete, name='category-detail'),
     path('ai/prompt/', ai_text, name='text-generate'),
     path('ai/product/', ai_product, name='product-generate'),
+    path('ai/scenarios/', ai_scenarios, name='scenario-generate'),
 ]

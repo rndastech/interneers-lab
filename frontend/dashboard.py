@@ -27,6 +27,7 @@ NAV_CREATE = "Create Product"
 NAV_UPDATE = "Update Product"
 NAV_DELETE = "Delete Product"
 NAV_CSV = "CSV Bulk Operations"
+NAV_SCENARIOS = "Scenario Selector"
 
 st.set_page_config(page_title="Inventory Dashboard", layout="wide")
 
@@ -101,7 +102,7 @@ def highlight_low_stock(row: pd.Series) -> list:
 st.sidebar.title("Inventory Dashboard")
 section = st.sidebar.radio(
     "Navigation",
-    [NAV_LIST, NAV_CREATE, NAV_UPDATE, NAV_DELETE, NAV_CSV],
+    [NAV_LIST, NAV_CREATE, NAV_UPDATE, NAV_DELETE, NAV_CSV, NAV_SCENARIOS],
 )
 
 
@@ -446,3 +447,73 @@ elif section == NAV_CSV:
             "bulk_delete_template.csv",
             MIME_CSV,
         )
+
+
+elif section == NAV_SCENARIOS:
+    st.title("Scenario Selector")
+    st.markdown(
+        "Select a scenario to populate the database with AI-generated products."
+    )
+    st.divider()
+    SCENARIOS = {
+        "Holiday Rush": {"icon": "🎄"},
+        "Flash Sale": {"icon": "🔥"},
+        "Back to School": {"icon": "🎒"},
+        "Premium Electronics": {"icon": "💎"},
+        "Warehouse Overstock": {"icon": "📦"},
+    }
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        selected_scenario = st.selectbox(
+            "Choose a Scenario",
+            options=list(SCENARIOS.keys()),
+            format_func=lambda x: f"{SCENARIOS[x]['icon']} {x}"
+        )
+
+    st.info(f"Selected: **{selected_scenario}** - Products will be AI-generated and added to database")
+
+    col_btn1, col_btn2 = st.columns(2)
+    
+    with col_btn1:
+        if st.button("✅ Populate DB with Scenario", use_container_width=True, type="primary"):
+            st.info("⏳ Generating and populating products...")
+            
+            try:
+                payload = {"scenario": selected_scenario}
+                
+                resp = requests.post(
+                    f"{BASE_URL}/ai/scenarios/",
+                    json=payload,
+                    timeout=30
+                )
+                
+                if resp.status_code == 201:
+                    data = resp.json()
+                    st.success("Successfully populated database!")
+                    
+                    col_a, col_b = st.columns(2)
+                    col_a.metric("Products Created", len(data.get("products", [])))
+                    col_b.metric("Scenario", data.get("scenario", selected_scenario))
+                    
+                    st.subheader("Created Products")
+                    products_df = pd.DataFrame(data.get("products", []))
+                    if not products_df.empty:
+                        st.dataframe(
+                            products_df[DISPLAY_COLUMNS],
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    
+                    fetch_all_products.clear()
+                else:
+                    st.error(f"Error {resp.status_code}: {resp.json()}")
+            except requests.exceptions.ConnectionError:
+                st.error(MSG_NO_CONNECTION)
+            except Exception as e:
+                st.error(f"Unexpected error: {str(e)}")
+    
+    with col_btn2:
+        if st.button("🔄 Refresh", use_container_width=True):
+            fetch_all_products.clear()
+            st.rerun()
