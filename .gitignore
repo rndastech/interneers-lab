@@ -1,1 +1,17 @@
 .DS_Store
+
+# Python virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Database
+*.sqlite3
+
+# Logs
+*.log
