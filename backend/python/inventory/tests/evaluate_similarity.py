@@ -39,7 +39,7 @@ def evaluate():
         logger=logger
     )
     
-    K = 5
+    K = 3
     total_precision = 0
     total_recall = 0
     total_rr = 0

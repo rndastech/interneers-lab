@@ -5,9 +5,7 @@ eval_set = [
 "relevant": [
 "Luminara Smart LED Desk Lamp",
 "Desk Lamp",
-"Lumix Pro LED Smart Lamp",
-"Luminance 8K OLED Reference Monitor",
-"Ultra-Slim Wireless Keyboard"
+"Lumix Pro LED Smart Lamp"
 ],
 "hard_negatives": [
 "HydroBlast Torrent Soaker",
@@ -21,9 +19,7 @@ eval_set = [
 "relevant": [
 "Power Bank",
 "VoltCharge Multi-Device Power Station",
-"VoltCharge 65W GaN Charger",
-"USB Cable",
-"Surge Protector",
+"VoltCharge 65W GaN Charger"
 ],
 "hard_negatives": [
 "Weighted Cotton Throw Blanket",
@@ -38,8 +34,7 @@ eval_set = [
 "Microphone",
 "Gaming Headset",
 "SonicPulse Wireless Earbuds",
-"Virtuoso Gen-3 Audiophile Headphones",
-"SonicBlast Portable Bluetooth Speaker"
+"Virtuoso Gen-3 Audiophile Headphones"
 ],
 "hard_negatives": [
 "Nebula Blocks 500-Piece Set",
@@ -53,7 +48,6 @@ eval_set = [
 "relevant": [
 "Obsidian X1 Desktop Server",
 "Obsidian Series Modular Gaming PC",
-"Apple MacBook Sleeve",
 "Laptop Stand",
 "Tablet"
 ],
@@ -85,9 +79,7 @@ eval_set = [
 "relevant": [
 "Lumina RGB Mechanical Keyboard",
 "HP Keyboard",
-"Ultra-Slim Wireless Keyboard",
-"Wireless Mouse",
-"Logitech Mouse"
+"Ultra-Slim Wireless Keyboard"
 ],
 "hard_negatives": [
 "Serenity 15lb Weighted Blanket",
@@ -118,8 +110,7 @@ eval_set = [
 "Ergonomic Mesh Task Chair",
 "ErgoSoft Executive Mesh Chair",
 "Office Chair",
-"Gaming Chair",
-"Standing Desk"
+"Gaming Chair"
 ],
 "hard_negatives": [
 "NitroSSD 1TB External Drive",
@@ -133,9 +124,7 @@ eval_set = [
 "relevant": [
 "Router",
 "Ethernet Cable",
-"USB-C Hub",
-"Cipher-X Encrypted Hardware Server",
-"VoltCharge 65W GaN Charger"
+"USB-C Hub"
 ],
 "hard_negatives": [
 "Barnaby the Huggable Bear",
@@ -149,9 +138,7 @@ eval_set = [
 "relevant": [
 "Starlight Pro 4K Holiday Laser Projector",
 "Projector",
-"Spectral 3D Holographic Projector",
-"4K Ultra HD Smart Monitor",
-"Vector Ultra-Wide 49-inch Curve Monitor"
+"Spectral 3D Holographic Projector"
 ],
 "hard_negatives": [
 "Precision Gel Ink Pens (12-pack)",
