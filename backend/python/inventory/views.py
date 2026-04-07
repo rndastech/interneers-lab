@@ -8,16 +8,50 @@ from inventory.adapters.product_repository import product_repository
 from inventory.adapters.category_repository import category_repository
 from inventory.adapters.python_logger import PythonProductLogger
 from inventory.adapters.google_genai_provider import get_google_genai_provider
+from inventory.adapters.qdrant_repository import vector_repository
+from inventory.adapters.e5_base_instruct import embedding_provider
 from inventory.services.product_service import ProductService
 from inventory.services.category_service import CategoryService
 from inventory.services.ai_service import AIService
+from inventory.services.vector_service import VectorService
 
 logger = PythonProductLogger("inventory.views")
-service = ProductService(product_repository, logger, category_repository)
+service = ProductService(product_repository, logger, category_repository, vector_repository, embedding_provider)
 category_service = CategoryService(category_repository, logger)
 ai_service = AIService(get_google_genai_provider(), logger, product_repository, category_service, service)
+vector_service = VectorService(vector_repository, product_repository, embedding_provider, logger)
 
 INTERNAL_SERVER_ERROR_MESSAGE = 'An unexpected internal error occurred'
+
+
+@api_view(['GET'])
+def similar_products(request):
+    logger.info(
+        'HTTP GET /products/similar - similar_products request received',
+        product_id=request.query_params.get('product_id'),
+        query_present=bool(request.query_params.get('query')),
+        top_k=request.query_params.get('top_k'),
+        category=request.query_params.get('category'),
+    )
+    try:
+        products = vector_service.top_k_similar_products(
+            product_id=request.query_params.get('product_id'),
+            query=request.query_params.get('query'),
+            top_k=request.query_params.get('top_k'),
+            score_threshold=(
+                float(request.query_params.get('score_threshold'))
+                if request.query_params.get('score_threshold') not in (None, '')
+                else None
+            ),
+            category=request.query_params.get('category'),
+        )
+        return Response({'count': len(products), 'results': products}, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        logger.error('HTTP 400 - validation error on similar_products', error=e.message)
+        return Response({'error': e.message}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        logger.critical('HTTP 500 - unexpected error on similar_products', exc_info=True)
+        return Response({'error': INTERNAL_SERVER_ERROR_MESSAGE}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 def create_product(request):
     logger.info(

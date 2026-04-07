@@ -18,6 +18,9 @@ from inventory.domain.exceptions import NotFoundError, DuplicateError, Validatio
 from inventory.ports.product_repository import ProductRepository
 from inventory.ports.category_repository import CategoryRepository
 from inventory.ports.logger import ProductLogger
+from inventory.ports.vector_repository import VectorRepository
+from inventory.ports.embedding_provider import EmbeddingProvider
+from inventory.domain.vector import VectorDocument
 from inventory.domain.config import (
     REQUIRED_CREATE_FIELDS,
     ALLOWED_UPDATE_FIELDS,
@@ -36,10 +39,87 @@ from inventory.domain.config import (
 
 class ProductService:
 
-    def __init__(self, repository: ProductRepository, logger: ProductLogger, category_repository: Optional[CategoryRepository] = None):
+    def __init__(self, repository: ProductRepository, logger: ProductLogger, category_repository: Optional[CategoryRepository] = None, vector_repository: Optional[VectorRepository] = None, embedding_provider: Optional[EmbeddingProvider] = None):
         self._repo = repository
         self._logger = logger
         self._category_repo = category_repository
+        self._vector_repo = vector_repository
+        self._embedding_provider = embedding_provider
+
+
+    def _vector_deps_available(self) -> bool:
+        return bool(self._vector_repo and self._embedding_provider)
+
+    @staticmethod
+    def _build_embed_text(product: dict) -> str:
+        parts = [
+            product.get("name", ""),
+            product.get("description", ""),
+            product.get("brand", ""),
+            product.get("category", ""),
+        ]
+        return " ".join(p.strip() for p in parts if p and p.strip())
+
+    def _sync_vectors_batch(self, products: list[dict]) -> None:
+        if not self._vector_deps_available():
+            self._logger.debug("Vector sync skipped: vector dependencies not provided")
+            return
+
+        candidates = [p for p in products if self._build_embed_text(p)]
+        skipped = len(products) - len(candidates)
+        if skipped:
+            self._logger.warning(
+                "Vector sync skipped for products with no embeddable text",
+                skipped_count=skipped,
+            )
+        if not candidates:
+            return
+
+        texts = [self._build_embed_text(p) for p in candidates]
+        try:
+            embeddings = self._embedding_provider.generate_embeddings(texts) if self._embedding_provider else []
+            docs = [
+                VectorDocument(
+                    vector_id=str(p["id"]),
+                    embedding=emb,
+                    metadata={"category": p.get("category")},
+                )
+                for p, emb in zip(candidates, embeddings)
+                if emb
+            ]
+            if docs and self._vector_repo:
+                self._vector_repo.upsert_batch(docs)
+                self._logger.debug(
+                    "Vector batch sync successful", synced_count=len(docs)
+                )
+        except Exception as e:
+            self._logger.error(
+                "Vector batch sync failed",
+                product_ids=[str(p["id"]) for p in candidates],
+                error=str(e),
+            )
+
+    def _sync_vector(self, product: dict) -> None:
+        self._sync_vectors_batch([product])
+
+    def _delete_vectors_batch(self, product_ids: list[str]) -> None:
+        if not self._vector_repo or not product_ids:
+            return
+        try:
+            self._vector_repo.delete_batch(product_ids)
+            self._logger.debug(
+                "Vector batch delete successful", deleted_count=len(product_ids)
+            )
+        except Exception as e:
+            self._logger.error(
+                "Vector batch delete failed",
+                product_ids=product_ids,
+                error=str(e),
+            )
+
+    def _delete_vector(self, product_id: str) -> None:
+        self._delete_vectors_batch([product_id])
+
 
     def validate_category_exists(self, category: str) -> None:
         if not category or self._category_repo is None:
@@ -59,6 +139,10 @@ class ProductService:
                 quantity=quantity,
                 minimum_stock_level=minimum,
             )
+
+    def _low_stock_check_many(self, products: list[dict]) -> None:
+        for product in products:
+            self.low_stock_check(product)
 
     def build_product_doc(self, data: dict) -> dict:
         validate_required_fields(data, REQUIRED_CREATE_FIELDS)
@@ -111,6 +195,7 @@ class ProductService:
         saved = self._repo.add(doc)
         self._logger.info('Product created successfully', product_id=saved['id'])
         self.low_stock_check(saved)
+        self._sync_vector(saved)
         return saved
 
     def get_product(self, raw_id) -> dict:
@@ -171,6 +256,7 @@ class ProductService:
             updated_fields=list(changes.keys())
             )
         self.low_stock_check(saved)
+        self._sync_vector(saved)
         return saved
 
     def delete_product(self, raw_id) -> None:
@@ -183,6 +269,7 @@ class ProductService:
             raise NotFoundError(PRODUCT_NOT_FOUND_MESSAGE)
 
         self._repo.delete(product_id)
+        self._delete_vector(product_id)
         self._logger.info('Product deleted', product_id=product_id)
 
     def parse_csv(self, file_obj) -> list[dict]:
@@ -224,10 +311,11 @@ class ProductService:
             original_row = valid_row_indices[doc_index]
             self._logger.warning('CSV create row rejected by DB', row_number=original_row, error=message)
             errors.append({'row': original_row, 'data': rows[original_row - 1], 'error': message})
+        self._low_stock_check_many(saved)
+        self._sync_vectors_batch(saved)
 
         for product in saved:
             self._logger.info('CSV row created successfully', product_id=product['id'])
-            self.low_stock_check(product)
 
         self._logger.info(
             'create_product_csv complete',
@@ -271,10 +359,11 @@ class ProductService:
             original_row = valid_row_indices[doc_index]
             self._logger.warning('CSV update row rejected by DB', row_number=original_row, error=message)
             errors.append({'row': original_row, 'data': rows[original_row - 1], 'error': message})
+        self._low_stock_check_many(updated)
+        self._sync_vectors_batch(updated)
 
         for product in updated:
             self._logger.info('CSV row updated successfully', product_id=product['id'])
-            self.low_stock_check(product)
 
         self._logger.info(
             'update_product_csv complete',
@@ -319,6 +408,7 @@ class ProductService:
                 self._logger.warning('CSV delete row not found', row_number=row_index, product_id=pid)
                 errors.append({'row': row_index, 'data': raw_row, 'error': PRODUCT_NOT_FOUND_MESSAGE})
         self._repo.delete_many(ids_to_delete)
+        self._delete_vectors_batch(ids_to_delete)
 
         for pid in ids_to_delete:
             self._logger.info('CSV row deleted successfully', product_id=pid)
