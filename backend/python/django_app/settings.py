@@ -89,6 +89,11 @@ DATABASES = {
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://root:example@localhost:27019/")
 MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "inventory_db")
 
+# Qdrant Configuration
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", None)
+QDRANT_COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "products")
+QDRANT_VECTOR_SIZE = int(os.environ.get("QDRANT_VECTOR_SIZE", "768"))
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators

@@ -2,11 +2,13 @@ import io
 import pandas as pd
 import requests
 import streamlit as st
+from typing import Optional
 
 BASE_URL = "http://localhost:8000/inventory"
 PRODUCTS_URL = f"{BASE_URL}/products/"
 PRODUCTS_CSV_URL = f"{BASE_URL}/products/csv/"
 CATEGORIES_URL = f"{BASE_URL}/categories/"
+SIMILAR_PRODUCTS_URL = f"{BASE_URL}/products/similar/"
 
 DISPLAY_COLUMNS = [
     "id", "name", "brand", "category", "barcode",
@@ -72,6 +74,42 @@ def fetch_categories() -> list:
     return categories
 
 
+def fetch_similar_products(query: Optional[str] = None, product_id: Optional[str] = None, top_k: int = 10) -> list:
+    try:
+        params: dict = {"top_k": top_k}
+        
+        # Must provide exactly one of query or product_id
+        if query is not None and query.strip():
+            params["query"] = query
+        elif product_id is not None and product_id.strip():
+            params["product_id"] = product_id
+        else:
+            st.error("Please provide either a query or product ID")
+            return []
+        
+        resp = requests.get(
+            SIMILAR_PRODUCTS_URL,
+            params=params,
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("results", [])
+    except requests.exceptions.ConnectionError:
+        st.error(MSG_NO_CONNECTION)
+        return []
+    except requests.exceptions.HTTPError as exc:
+        try:
+            error_detail = exc.response.json().get("error", str(exc))
+        except Exception:
+            error_detail = str(exc)
+        st.error(f"API error: {error_detail}")
+        return []
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
+        return []
+
+
 def show_response(resp: requests.Response, success_code: int, success_msg: str) -> None:
     if resp.status_code == success_code:
         st.success(f"{success_msg}")
@@ -109,6 +147,35 @@ section = st.sidebar.radio(
 if section == NAV_LIST:
     st.title("Product List")
 
+    # Similarity Search Section
+    st.subheader("🔍 Find Similar Products")
+    sim_search_col1, sim_search_col2 = st.columns([3, 1])
+    with sim_search_col1:
+        similarity_search = st.text_input("Search by query for similar items", placeholder="Enter product name, description, or query…")
+    with sim_search_col2:
+        similarity_top_k = st.number_input("Top K results", min_value=1, max_value=50, value=10)
+    
+    # Display similarity search results if a query is provided
+    if similarity_search:
+        st.divider()
+        st.subheader("Similar Products Results")
+        try:
+            similar_products = fetch_similar_products(query=similarity_search, top_k=int(similarity_top_k))
+            if similar_products:
+                similar_df = pd.DataFrame(similar_products)
+                for col in DISPLAY_COLUMNS:
+                    if col not in similar_df.columns:
+                        similar_df[col] = ""
+                similar_df = similar_df[[col for col in DISPLAY_COLUMNS if col in similar_df.columns]]
+                st.caption(f"Found **{len(similar_df)}** similar product(s)")
+                st.dataframe(similar_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No similar products found.")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error fetching similar products: {str(e)}")
+        st.divider()
+
+    st.subheader("All Products")
     col_search, col_cat, col_refresh = st.columns([3, 2, 1])
     with col_search:
         search = st.text_input("Search (name / barcode / description)", placeholder="laptop…")
@@ -151,9 +218,65 @@ if section == NAV_LIST:
         if low_stock_count:
             st.warning(f"**{low_stock_count}** product(s) are below their minimum stock level.")
 
-        styled = df.style.apply(highlight_low_stock, axis=1)
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        # Display products with "Find Similar" button
+        st.subheader("Product Details")
+        for idx, row in df.iterrows():
+            with st.container(border=True):
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.write(f"**{row['name']}** — {row.get('brand', '')}")
+                    st.caption(f"ID: {row['id']} | Category: {row.get('category', 'N/A')} | Price: ${row.get('price', 'N/A')} | Qty: {row.get('quantity', 'N/A')}")
+                    if row.get('description'):
+                        st.text(row['description'][:100] + ("..." if len(str(row['description'])) > 100 else ""))
+                
+                with col2:
+                    if st.button("🔗 Find Similar", key=f"btn_similar_{row['id']}", use_container_width=True):
+                        st.session_state.selected_product_id = row['id']
+                        st.session_state.show_similar = True
+                        st.rerun()
+        
+        # Handle similar products display when button is clicked
+        if st.session_state.get("show_similar") and st.session_state.get("selected_product_id"):
+            st.divider()
+            st.subheader(f"🔗 Top 10 Similar Products for ID: {st.session_state['selected_product_id']}")
+            
+            try:
+                similar_products = fetch_similar_products(
+                    product_id=st.session_state["selected_product_id"],
+                    top_k=10
+                )
+                if similar_products:
+                    similar_df = pd.DataFrame(similar_products)
+                    for col in DISPLAY_COLUMNS:
+                        if col not in similar_df.columns:
+                            similar_df[col] = ""
+                    similar_df = similar_df[[col for col in DISPLAY_COLUMNS if col in similar_df.columns]]
+                    st.dataframe(similar_df, use_container_width=True, hide_index=True)
+                    
+                    col_download, col_close = st.columns([1, 1])
+                    with col_download:
+                        st.download_button(
+                            label="Download as CSV",
+                            data=similar_df.to_csv(index=False).encode("utf-8"),
+                            file_name=f"similar_products_{st.session_state['selected_product_id']}.csv",
+                            mime=MIME_CSV,
+                        )
+                    with col_close:
+                        if st.button("Close", use_container_width=True):
+                            st.session_state.show_similar = False
+                            st.rerun()
+                else:
+                    st.info("No similar products found for this item.")
+                    if st.button("Close"):
+                        st.session_state.show_similar = False
+                        st.rerun()
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error fetching similar products: {str(e)}")
+                if st.button("Close"):
+                    st.session_state.show_similar = False
+                    st.rerun()
 
+        st.divider()
         st.download_button(
             label="Download current view as CSV",
             data=df.to_csv(index=False).encode("utf-8"),

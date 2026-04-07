@@ -43,18 +43,20 @@ class AIService:
         try:
             validated_request = validate_text_gen(request_data)
             generation_config = extract_config(validated_request)
-            response_text = self._provider.generate_response(
+            response_text, token_usage = self._provider.generate_response(
                 validated_request.prompt, **generation_config
             )
             self._logger.info(
                 f"{operation_name} completed successfully",
                 response_length=len(response_text),
+                token_usage=token_usage,
             )
             return {
                 "type": "generate",
                 "success": True,
                 "response": response_text,
                 "content_type": "text",
+                "token_usage": token_usage,
             }
         except ValidationError as e:
             self._logger.error(f"Validation error in {operation_name}", error=str(e))
@@ -138,8 +140,9 @@ class AIService:
             category_names=category_names,
             special_instructions=special_instructions,
         )
-        response_text = self._provider.generate_response(prompt)
+        response_text, token_usage = self._provider.generate_response(prompt)
         products_data = AIResponseParser.parse_ai_response(response_text, self._logger)
+        self._logger.info("Product pipeline token usage", token_usage=token_usage)
         validated_products = validate_products_schema(products_data, self._logger)
         return self.add_products(validated_products)
 

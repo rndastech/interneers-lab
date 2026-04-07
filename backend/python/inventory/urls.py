@@ -3,6 +3,7 @@ from .views import (
     products_list_create,
     product_detail_update_delete,
     products_csv,
+    similar_products,
     categories_list_create,
     category_detail_update_delete,
     ai_text,
@@ -12,6 +13,7 @@ from .views import (
 
 urlpatterns = [
     path('products/', products_list_create, name='product-list-create'),
+    path('products/similar/', similar_products, name='product-similar'),
     path('products/csv/', products_csv, name='product-csv'),
     path('products/<str:product_id>/', product_detail_update_delete, name='product-detail'),
     path('categories/', categories_list_create, name='category-list-create'),
