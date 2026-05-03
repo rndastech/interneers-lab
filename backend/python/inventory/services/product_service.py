@@ -210,6 +210,30 @@ class ProductService:
         self._logger.info('Product retrieved', product_id=product_id)
         return product
 
+    def get_many_by_ids(self, raw_ids: list[str]) -> dict[str, dict]:
+        self._logger.debug('get_many_by_ids called', raw_count=len(raw_ids))
+        if not raw_ids:
+            return {}
+
+        validated_ids = [validate_product_id(raw_id) for raw_id in raw_ids]
+        unique_ids = list(dict.fromkeys(validated_ids))
+        products = self._repo.get_many_by_ids(unique_ids)
+
+        missing = [pid for pid in unique_ids if pid not in products]
+        if missing:
+            self._logger.warning(
+                'Products not found',
+                missing_count=len(missing),
+                missing_ids=missing[:10],
+            )
+
+        self._logger.info(
+            'Products retrieved in batch',
+            requested_count=len(unique_ids),
+            returned_count=len(products),
+        )
+        return products
+
     def list_products(self, categories=None, search=None, raw_page_size=None, raw_after=None) -> dict:
         self._logger.debug(
             'list_products called',

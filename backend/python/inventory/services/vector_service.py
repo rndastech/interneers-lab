@@ -35,8 +35,26 @@ class VectorService:
         score_threshold: Optional[float] = None,
         category: Optional[str] = None,
     ) -> list[dict]:
+        scored = self.top_k_similar_products_with_scores(
+            product_id=product_id,
+            query=query,
+            top_k=top_k,
+            score_threshold=score_threshold,
+            category=category,
+        )
+        return [item['product'] for item in scored]
+
+    def top_k_similar_products_with_scores(
+        self,
+        *,
+        product_id: Optional[str] = None,
+        query: Optional[str] = None,
+        top_k: Optional[Any] = None,
+        score_threshold: Optional[float] = None,
+        category: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
         self._logger.debug(
-            'top_k_similar_products called',
+            'top_k_similar_products_with_scores called',
             product_id=product_id,
             query=query,
             top_k=top_k,
@@ -74,8 +92,20 @@ class VectorService:
         self._logger.debug('Extracted vector ids from results', ids_count=len(ids_in_order), ids=ids_in_order[:10])
         products_by_id = self._product_repo.get_many_by_ids(ids_in_order)
         self._logger.debug('Retrieved products from repository', retrieved_count=len(products_by_id), requested_count=len(ids_in_order))
-        hydrated = [products_by_id[pid] for pid in ids_in_order if pid in products_by_id]
-        self._logger.debug('Hydrated products in order', hydrated_count=len(hydrated))
+
+        scored_products: list[dict[str, Any]] = []
+        for result in results:
+            product = products_by_id.get(result.vector_id)
+            if not product:
+                continue
+            scored_products.append(
+                {
+                    'product': product,
+                    'score': float(result.score),
+                    'vector_id': result.vector_id,
+                }
+            )
+        self._logger.debug('Hydrated scored products in order', hydrated_count=len(scored_products))
 
         missing = [pid for pid in ids_in_order if pid not in products_by_id]
         if missing:
@@ -86,12 +116,12 @@ class VectorService:
             )
 
         self._logger.info(
-            'top_k_similar_products completed',
+            'top_k_similar_products_with_scores completed',
             mode=mode,
-            total_results=len(hydrated),
+            total_results=len(scored_products),
             missing_count=len(missing),
         )
-        return hydrated
+        return scored_products
 
     def _resolve_mode(self, *, product_id: Optional[str], query: Optional[str]) -> str:
         if product_id and query:

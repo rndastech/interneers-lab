@@ -9,3 +9,9 @@ transformers>=4.30.0
 torch>=2.0.0
 numpy
 qdrant-client
+langchain
+langchain-text-splitters
+langchain-google-genai
+langchain-qdrant
+langsmith
+langgraph

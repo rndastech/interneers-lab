@@ -95,6 +95,22 @@ QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", None)
 QDRANT_COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "products")
 QDRANT_VECTOR_SIZE = int(os.environ.get("QDRANT_VECTOR_SIZE", "768"))
 
+# RAG Knowledge Base Configuration
+RAG_KNOWLEDGE_DIR = os.environ.get("RAG_KNOWLEDGE_DIR", str(BASE_DIR / "knowledge_docs"))
+RAG_QDRANT_COLLECTION_NAME = os.environ.get("RAG_QDRANT_COLLECTION_NAME", "knowledge_docs")
+RAG_CHUNK_SIZE = int(os.environ.get("RAG_CHUNK_SIZE", "800"))
+RAG_CHUNK_OVERLAP = int(os.environ.get("RAG_CHUNK_OVERLAP", "150"))
+RAG_RETRIEVAL_TOP_K = int(os.environ.get("RAG_RETRIEVAL_TOP_K", "3"))
+RAG_RETRIEVAL_MAX_TOP_K = int(os.environ.get("RAG_RETRIEVAL_MAX_TOP_K", "20"))
+
+# LangSmith Tracing Configuration
+LANGSMITH_API_KEY = os.environ.get("LANGSMITH_API_KEY", "")
+LANGSMITH_PROJECT = os.environ.get("LANGSMITH_PROJECT", "interneers-lab-rag")
+LANGSMITH_RUNTIME_PROJECT = os.environ.get("LANGSMITH_RUNTIME_PROJECT", LANGSMITH_PROJECT)
+LANGSMITH_EVAL_PROJECT = os.environ.get("LANGSMITH_EVAL_PROJECT", f"{LANGSMITH_RUNTIME_PROJECT}-eval")
+LANGSMITH_ENDPOINT = os.environ.get("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+LANGSMITH_TRACING = os.environ.get("LANGSMITH_TRACING", "false").strip().lower() in {"1", "true", "yes", "on"}
+
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 

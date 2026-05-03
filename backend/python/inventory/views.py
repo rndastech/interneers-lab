@@ -1,25 +1,69 @@
 ﻿from urllib.parse import urlencode
 
+from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from inventory.domain.exceptions import ValidationError, NotFoundError, DuplicateError
+from inventory.domain.schemas import (
+    validate_ask_expert_request,
+    validate_quote_agent_request,
+    validate_retrieve_chunks_request,
+)
 from inventory.adapters.product_repository import product_repository
 from inventory.adapters.category_repository import category_repository
 from inventory.adapters.python_logger import PythonProductLogger
 from inventory.adapters.google_genai_provider import get_google_genai_provider
-from inventory.adapters.qdrant_repository import vector_repository
+from inventory.adapters.langsmith_tracer import LangSmithTracer
+from inventory.adapters.qdrant_repository import vector_repository, knowledge_vector_repository
 from inventory.adapters.e5_base_instruct import embedding_provider
+from inventory.adapters.langchain_google_genai_adapter import LangChainGoogleGenAIAdapter
 from inventory.services.product_service import ProductService
 from inventory.services.category_service import CategoryService
 from inventory.services.ai_service import AIService
+from inventory.services.rag_qa_service import RAGQAService
 from inventory.services.vector_service import VectorService
+from inventory.services.rag_retrieval_service import RAGRetrievalService
+from inventory.services.quote_service import QuoteService
+from inventory.services.langgraph_quote_agent_service import LangGraphQuoteAgentService
 
 logger = PythonProductLogger("inventory.views")
 service = ProductService(product_repository, logger, category_repository, vector_repository, embedding_provider)
 category_service = CategoryService(category_repository, logger)
 ai_service = AIService(get_google_genai_provider(), logger, product_repository, category_service, service)
 vector_service = VectorService(vector_repository, product_repository, embedding_provider, logger)
+runtime_tracer = LangSmithTracer(
+    api_key=settings.LANGSMITH_API_KEY,
+    endpoint=settings.LANGSMITH_ENDPOINT,
+    default_project=settings.LANGSMITH_RUNTIME_PROJECT,
+    enabled=settings.LANGSMITH_TRACING,
+    logger=logger,
+)
+rag_retrieval_service = RAGRetrievalService(
+    knowledge_vector_repository=knowledge_vector_repository,
+    product_vector_repository=vector_repository,
+    product_repository=product_repository,
+    embedding_provider=embedding_provider,
+    logger=logger,
+    default_top_k=settings.RAG_RETRIEVAL_TOP_K,
+    max_top_k=settings.RAG_RETRIEVAL_MAX_TOP_K,
+    tracer=runtime_tracer,
+    trace_project=settings.LANGSMITH_RUNTIME_PROJECT,
+)
+rag_qa_service = RAGQAService(
+    retriever=rag_retrieval_service,
+    llm_adapter=LangChainGoogleGenAIAdapter(get_google_genai_provider(), logger),
+    logger=logger,
+    tracer=runtime_tracer,
+    trace_project=settings.LANGSMITH_RUNTIME_PROJECT,
+)
+quote_service = QuoteService(service, logger)
+quote_agent_service = LangGraphQuoteAgentService(
+    vector_service=vector_service,
+    quote_service=quote_service,
+    logger=logger,
+    ai_provider=get_google_genai_provider(),
+)
 
 INTERNAL_SERVER_ERROR_MESSAGE = 'An unexpected internal error occurred'
 
@@ -475,6 +519,74 @@ def scenario_products(request):
     except Exception:
         logger.critical('HTTP 500 - unexpected error on AI scenario request', exc_info=True)
         return Response({'error': INTERNAL_SERVER_ERROR_MESSAGE}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def retrieve_chunks(request):
+    logger.info(
+        'HTTP POST /ai/retrieve/ - retrieve_chunks received',
+        top_k=request.data.get('top_k'),
+        include_product_context=request.data.get('include_product_context', True),
+        category=request.data.get('category'),
+    )
+    try:
+        validated_request = validate_retrieve_chunks_request(request.data)
+        results = rag_retrieval_service.retrieve_relevant_chunks(
+            query=validated_request.query,
+            top_k=validated_request.top_k,
+            category=validated_request.category,
+            include_product_context=validated_request.include_product_context,
+        )
+        return Response(
+            {
+                'count': len(results),
+                'results': [chunk.model_dump() for chunk in results],
+            },
+            status=status.HTTP_200_OK,
+        )
+    except ValidationError as e:
+        logger.error('HTTP 400 - validation error on retrieve_chunks', error=e.message)
+        return Response({'error': e.message}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        logger.critical('HTTP 500 - unexpected error on retrieve_chunks', exc_info=True)
+        return Response({'error': INTERNAL_SERVER_ERROR_MESSAGE}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def ask_expert(request):
+    logger.info(
+        'HTTP POST /ai/ask/ - ask_expert received',
+        top_k=request.data.get('top_k'),
+        include_product_context=request.data.get('include_product_context', True),
+        category=request.data.get('category'),
+    )
+    try:
+        validated_request = validate_ask_expert_request(request.data)
+        response_payload = rag_qa_service.ask_expert(validated_request.model_dump())
+        return Response(response_payload, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        logger.error('HTTP 400 - validation error on ask_expert', error=e.message)
+        return Response({'error': e.message}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        logger.critical('HTTP 500 - unexpected error on ask_expert', exc_info=True)
+        return Response({'error': INTERNAL_SERVER_ERROR_MESSAGE}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def quote_agent(request):
+    logger.info(
+        'HTTP POST /ai/quote/ - quote_agent received',
+        top_k=request.data.get('top_k'),
+        quantity=request.data.get('quantity'),
+        category=request.data.get('category'),
+    )
+    try:
+        validated_request = validate_quote_agent_request(request.data)
+        response_payload = quote_agent_service.run_quote_agent(validated_request.model_dump())
+        return Response(response_payload, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        logger.error('HTTP 400 - validation error on quote_agent', error=e.message)
+        return Response({'error': e.message}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        logger.critical('HTTP 500 - unexpected error on quote_agent', exc_info=True)
+        return Response({'error': INTERNAL_SERVER_ERROR_MESSAGE}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
 @api_view(['GET'])
 def ai_text(request):
@@ -487,3 +599,18 @@ def ai_product(request):
 @api_view(['POST'])
 def ai_scenarios(request):
     return scenario_products(request)
+
+
+@api_view(['POST'])
+def ai_retrieve(request):
+    return retrieve_chunks(request)
+
+
+@api_view(['POST'])
+def ai_ask(request):
+    return ask_expert(request)
+
+
+@api_view(['POST'])
+def ai_quote(request):
+    return quote_agent(request)

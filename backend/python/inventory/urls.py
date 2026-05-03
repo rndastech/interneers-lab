@@ -9,6 +9,9 @@ from .views import (
     ai_text,
     ai_product,
     ai_scenarios,
+    ai_retrieve,
+    ai_ask,
+    ai_quote,
 )
 
 urlpatterns = [
@@ -21,4 +24,7 @@ urlpatterns = [
     path('ai/prompt/', ai_text, name='text-generate'),
     path('ai/product/', ai_product, name='product-generate'),
     path('ai/scenarios/', ai_scenarios, name='scenario-generate'),
+    path('ai/retrieve/', ai_retrieve, name='rag-retrieve'),
+    path('ai/ask/', ai_ask, name='rag-ask'),
+    path('ai/quote/', ai_quote, name='quote-agent'),
 ]

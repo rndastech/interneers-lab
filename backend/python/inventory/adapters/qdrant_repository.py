@@ -169,7 +169,6 @@ class QdrantVectorRepository(VectorRepository):
         score_threshold: Optional[float] = None,
         category: Optional[str] = None,
     ) -> list[SearchResult]:
-        # client.search() is removed in v1.17+; use query_points() instead
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=embedding,
@@ -186,12 +185,10 @@ class QdrantVectorRepository(VectorRepository):
         score_threshold: Optional[float] = None,
         category: Optional[str] = None,
     ) -> list[SearchResult]:
-        # client.recommend() is removed in v1.17+; passing a point UUID string
-        # to query_points(query=) triggers the same "recommend by ID" behaviour
         response = self.client.query_points(
             collection_name=self.collection_name,
-            query=self._to_qdrant_id(vector_id),   # UUID str → recommend strategy
-            limit=limit + 1,                        # +1 because the source point itself may appear
+            query=self._to_qdrant_id(vector_id),  
+            limit=limit + 1,                     
             score_threshold=score_threshold,
             query_filter=self._category_filter(category),
         )
@@ -205,6 +202,13 @@ class QdrantVectorRepository(VectorRepository):
 vector_repository = QdrantVectorRepository(
     url=settings.QDRANT_URL,
     collection_name=settings.QDRANT_COLLECTION_NAME,
+    vector_size=settings.QDRANT_VECTOR_SIZE,
+    api_key=settings.QDRANT_API_KEY,
+)
+
+knowledge_vector_repository = QdrantVectorRepository(
+    url=settings.QDRANT_URL,
+    collection_name=settings.RAG_QDRANT_COLLECTION_NAME,
     vector_size=settings.QDRANT_VECTOR_SIZE,
     api_key=settings.QDRANT_API_KEY,
 )

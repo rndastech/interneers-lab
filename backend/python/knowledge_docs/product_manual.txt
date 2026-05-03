@@ -1,0 +1,21 @@
+Product Manual
+
+Welcome to the Interneers Lab catalog support manual.
+
+Product Basics
+- Every product record includes: name, category, brand, price, quantity, and minimum stock level.
+- Product descriptions should include key features, material, size, and target user.
+
+Warranty Guidance
+- Standard products carry a 12-month limited warranty against manufacturing defects.
+- Premium electronics carry a 24-month limited warranty.
+- Warranty claims require proof of purchase and product serial or barcode where available.
+
+Care and Safety
+- Keep products in original packaging for at least 30 days when possible.
+- Follow category-specific handling instructions listed on the product page.
+- For electronics, avoid moisture and use approved charging accessories.
+
+Support
+- For troubleshooting, users should first check vendor FAQs and setup instructions.
+- If unresolved, users can contact support with product details and issue summary.
