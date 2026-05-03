@@ -1,7 +1,7 @@
 import os
 import logging
 from functools import lru_cache
-from typing import Any
+from typing import Any, Tuple
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -21,7 +21,7 @@ class GoogleGenAIProvider(AIProvider):
         self._client = genai.Client(api_key=api_key)
         self._model = os.getenv("GOOGLE_MODEL", self.DEFAULT_MODEL)
 
-    def generate_response(self, prompt: str, **kwargs: Any) -> str:
+    def generate_response(self, prompt: str, **kwargs: Any) -> Tuple[str, dict]:
         config = types.GenerateContentConfig(
             system_instruction=self.SYSTEM_INSTRUCTION,
             **kwargs,
@@ -37,8 +37,8 @@ class GoogleGenAIProvider(AIProvider):
         text = self._extract_text(response)
         if not text:
             raise ValidationError("No text content received from Google GenAI API")
-        return text
-
+        usage = self._extract_usage(response)
+        return text, usage
 
     @staticmethod
     def _extract_text(response: types.GenerateContentResponse) -> str:
@@ -53,6 +53,17 @@ class GoogleGenAIProvider(AIProvider):
                 if text:
                     return text.strip()
         return ""
+
+    @staticmethod
+    def _extract_usage(response: types.GenerateContentResponse) -> dict:
+        metadata = getattr(response, "usage_metadata", None)
+        if metadata is None:
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        return {
+            "prompt_tokens": getattr(metadata, "prompt_token_count", 0) or 0,
+            "completion_tokens": getattr(metadata, "candidates_token_count", 0) or 0,
+            "total_tokens": getattr(metadata, "total_token_count", 0) or 0,
+        }
 
 @lru_cache(maxsize=1)
 def get_google_genai_provider() -> GoogleGenAIProvider:

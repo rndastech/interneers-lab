@@ -337,3 +337,61 @@ Key fields:
 
 ---
 
+## LangSmith Tracing (RAG Runtime + Eval)
+
+LangSmith tracing is integrated for:
+- Runtime RAG calls (`/inventory/ai/retrieve/` and `/inventory/ai/ask/`)
+- Offline retrieval and RAG eval scripts
+
+### Environment Variables
+
+Set these in your `.env` (or shell) before running the backend/evals:
+
+```bash
+LANGSMITH_API_KEY=your-langsmith-api-key
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_TRACING=true
+LANGSMITH_RUNTIME_PROJECT=interneers-lab-rag-runtime
+LANGSMITH_EVAL_PROJECT=interneers-lab-rag-eval
+```
+
+> `LANGSMITH_TRACING=true` is required for traces to be emitted.
+
+### Runtime Traces
+
+1. Start the backend:
+   ```bash
+   python manage.py runserver
+   ```
+2. Hit one of the RAG endpoints:
+   - `POST /inventory/ai/retrieve/`
+   - `POST /inventory/ai/ask/`
+3. Open LangSmith and select project `interneers-lab-rag-runtime` (or your configured runtime project).
+
+Runtime traces include metadata such as `request_id` for correlation with application logs.
+
+### Eval Traces
+
+Run eval suites from `backend/python`:
+
+```bash
+python inventory/tests/evaluate_rag_retrieval.py --k 3 --strict
+python inventory/tests/evaluate_rag_qa.py --k 3 --strict
+```
+
+These traces are sent to `interneers-lab-rag-eval` (or your configured eval project), separate from runtime traffic.
+
+### Recommended Workflow
+
+1. Seed knowledge collection:
+   ```bash
+   python manage.py seed_qdrant_knowledge --clear
+   ```
+2. Run retrieval eval with tracing enabled.
+3. Run RAG QA eval with tracing enabled.
+4. Inspect both projects in LangSmith:
+   - Runtime project for real user/API flows
+   - Eval project for benchmark and regression analysis
+
+---
+

@@ -33,6 +33,8 @@ This is a RESTful API for managing product inventory and categories. The API pro
      - [Get Category](#11-get-category)
      - [Update Category](#12-update-category)
      - [Delete Category](#13-delete-category)
+   - [AI](#ai)
+     - [Quote Agent](#14-quote-agent)
 5. [Endpoint Summary](#endpoint-summary)
 6. [Pagination](#pagination)
 7. [Error Handling](#error-handling)
@@ -823,6 +825,107 @@ curl -X DELETE "http://localhost:8000/inventory/categories/65f1a2b3c4d5e6f7a8b9c
 
 ---
 
+### AI
+
+---
+
+### 14. Quote Agent
+
+Generate a quote invoice from a natural-language request. The agent identifies the best matching product using vector similarity, checks inventory for the selected product, and applies tiered discount rules.
+
+**Endpoint**: `POST /inventory/ai/quote/`
+
+**Request Body**:
+```json
+{
+  "query": "I need 60 building blocks for a school project, can I get a deal?",
+  "quantity": 60,
+  "top_k": 5,
+  "category": "toys",
+  "score_threshold": 0.2
+}
+```
+
+**Required fields**: `query`
+
+**Optional fields**:
+- `quantity`: explicit quote quantity override (must be >= 1)
+- `top_k`: number of candidate products to evaluate (default `5`, range `1..20`)
+- `category`: optional category filter used in product identification
+- `score_threshold`: optional vector threshold (`0.0..1.0`)
+
+> If `quantity` is omitted, the service attempts to parse the first integer from `query`.
+
+**Discount Rules** (hard-coded):
+- Quantity > 100: 15% off
+- Quantity > 50: 10% off
+- Quantity > 20: 5% off
+- Otherwise: 0% off
+
+**Success Response**:
+- **Code**: `200 OK`
+- **Body**:
+```json
+{
+  "request": "I need 60 building blocks for a school project, can I get a deal?",
+  "identified_product": {
+    "id": "65f1a2b3c4d5e6f7a8b9c0d1",
+    "name": "Lego Classic Building Blocks",
+    "category": "toys",
+    "brand": "Lego"
+  },
+  "inventory": {
+    "quantity_available": 125,
+    "minimum_stock_level": 20,
+    "in_stock": true,
+    "low_stock": false,
+    "can_fulfill": true
+  },
+  "discount": {
+    "tier_name": "bulk_50_plus",
+    "discount_percent": 10.0,
+    "discount_amount": 120.0
+  },
+  "quote": {
+    "product_id": "65f1a2b3c4d5e6f7a8b9c0d1",
+    "product_name": "Lego Classic Building Blocks",
+    "unit_price": 20.0,
+    "quantity": 60,
+    "subtotal": 1200.0,
+    "final_total": 1080.0
+  },
+  "metadata": {
+    "component": "LangGraphQuoteAgentService",
+    "candidate_count": 5,
+    "selection_strategy": "vector_top_1",
+    "quantity_source": "explicit",
+    "discount_description": "10% off for quantities over 50"
+  }
+}
+```
+
+**Error Responses**:
+- **Code**: `400 Bad Request` — Invalid request payload, no quantity in request, no product match, or invalid quote quantity
+- **Code**: `500 Internal Server Error` — Unexpected runtime errors
+- **Body**:
+```json
+{
+  "error": "Error message describing the issue"
+}
+```
+
+**Example**:
+```bash
+curl -X POST http://localhost:8000/inventory/ai/quote/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "I need 60 building blocks for a school project, can I get a deal?",
+    "top_k": 5
+  }'
+```
+
+---
+
 ## Endpoint Summary
 
 | Method | Endpoint | Description |
@@ -840,6 +943,7 @@ curl -X DELETE "http://localhost:8000/inventory/categories/65f1a2b3c4d5e6f7a8b9c
 | `GET` | `/inventory/categories/<category_id>/` | Get a category by ID |
 | `PUT` / `PATCH` | `/inventory/categories/<category_id>/` | Update a category |
 | `DELETE` | `/inventory/categories/<category_id>/` | Soft-delete a category |
+| `POST` | `/inventory/ai/quote/` | Generate quote invoice from natural language |
 
 ---
 

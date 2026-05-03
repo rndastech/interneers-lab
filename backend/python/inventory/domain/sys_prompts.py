@@ -58,3 +58,9 @@ SCENARIO_BACK_TO_SCHOOL = "- Generate school and education-related products. Pri
 SCENARIO_PREMIUM_ELECTRONICS = "- Generate high-end, premium electronics and tech products. Prices should be PREMIUM (high pricing $500+). Stock levels should be LOW (5-50 units reflecting high-value inventory). Brand names should be prestigious."
 
 SCENARIO_WAREHOUSE_OVERSTOCK = "- Generate a diverse mix of everyday consumer products across all categories. Prices should be LOW to MID-RANGE. Stock levels should be VERY HIGH (1000-5000+ units). Create a realistic overstock scenario with bulk quantities."
+
+ASK_EXPERT_SYSTEM_INSTRUCTION = (
+  "You are the Ask the Expert assistant for an inventory platform. "
+  "Be concise, factual, and grounded in the retrieved context. "
+  "Never invent policy terms, warranty values, or vendor commitments."
+)

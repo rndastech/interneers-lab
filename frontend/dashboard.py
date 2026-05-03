@@ -2,11 +2,15 @@ import io
 import pandas as pd
 import requests
 import streamlit as st
+from typing import Optional
 
 BASE_URL = "http://localhost:8000/inventory"
 PRODUCTS_URL = f"{BASE_URL}/products/"
 PRODUCTS_CSV_URL = f"{BASE_URL}/products/csv/"
 CATEGORIES_URL = f"{BASE_URL}/categories/"
+SIMILAR_PRODUCTS_URL = f"{BASE_URL}/products/similar/"
+ASK_EXPERT_URL = f"{BASE_URL}/ai/ask/"
+QUOTE_AGENT_URL = f"{BASE_URL}/ai/quote/"
 
 DISPLAY_COLUMNS = [
     "id", "name", "brand", "category", "barcode",
@@ -21,6 +25,7 @@ MSG_NO_CONNECTION = (
 MSG_ROW_ERRORS = "Row errors:"
 LABEL_ERRORS = "Errors"
 LABEL_FILE_UPLOADER = "Choose CSV file"
+LABEL_ALL_CATEGORIES = "All categories"
 
 NAV_LIST = "Product List"
 NAV_CREATE = "Create Product"
@@ -28,11 +33,16 @@ NAV_UPDATE = "Update Product"
 NAV_DELETE = "Delete Product"
 NAV_CSV = "CSV Bulk Operations"
 NAV_SCENARIOS = "Scenario Selector"
+NAV_EXPERT = "Ask the Expert"
+NAV_QUOTE = "Quote Agent"
 
 st.set_page_config(page_title="Inventory Dashboard", layout="wide")
 
+if "expert_chat_history" not in st.session_state:
+    st.session_state.expert_chat_history = []
 
-@st.cache_data(ttl=30)
+
+@st.cache_data(ttl=300)
 def fetch_all_products() -> list:
     products = []
     url = PRODUCTS_URL + "?page_size=100"
@@ -72,6 +82,105 @@ def fetch_categories() -> list:
     return categories
 
 
+def fetch_similar_products(query: Optional[str] = None, product_id: Optional[str] = None, top_k: int = 10) -> list:
+    try:
+        params: dict = {"top_k": top_k}
+        
+        # Must provide exactly one of query or product_id
+        if query is not None and query.strip():
+            params["query"] = query
+        elif product_id is not None and product_id.strip():
+            params["product_id"] = product_id
+        else:
+            st.error("Please provide either a query or product ID")
+            return []
+        
+        resp = requests.get(
+            SIMILAR_PRODUCTS_URL,
+            params=params,
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("results", [])
+    except requests.exceptions.ConnectionError:
+        st.error(MSG_NO_CONNECTION)
+        return []
+    except requests.exceptions.HTTPError as exc:
+        try:
+            error_detail = exc.response.json().get("error", str(exc))
+        except Exception:
+            error_detail = str(exc)
+        st.error(f"API error: {error_detail}")
+        return []
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
+        return []
+
+
+def ask_expert(
+    question: str,
+    top_k: int = 3,
+    include_product_context: bool = True,
+    category: Optional[str] = None,
+) -> Optional[dict]:
+    payload: dict = {
+        "query": question,
+        "top_k": int(top_k),
+        "include_product_context": bool(include_product_context),
+    }
+    if category and category.strip():
+        payload["category"] = category.strip().lower()
+
+    try:
+        resp = requests.post(ASK_EXPERT_URL, json=payload, timeout=300)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.ConnectionError:
+        st.error(MSG_NO_CONNECTION)
+    except requests.exceptions.HTTPError as exc:
+        try:
+            error_detail = exc.response.json().get("error", str(exc))
+        except Exception:
+            error_detail = str(exc)
+        st.error(f"API error: {error_detail}")
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
+    return None
+
+
+def request_quote_invoice(
+    query: str,
+    top_k: int = 5,
+    quantity: Optional[int] = None,
+    category: Optional[str] = None,
+) -> Optional[dict]:
+    payload: dict = {
+        "query": query,
+        "top_k": int(top_k),
+    }
+    if quantity is not None:
+        payload["quantity"] = int(quantity)
+    if category and category.strip():
+        payload["category"] = category.strip().lower()
+
+    try:
+        resp = requests.post(QUOTE_AGENT_URL, json=payload, timeout=300)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.ConnectionError:
+        st.error(MSG_NO_CONNECTION)
+    except requests.exceptions.HTTPError as exc:
+        try:
+            error_detail = exc.response.json().get("error", str(exc))
+        except Exception:
+            error_detail = str(exc)
+        st.error(f"API error: {error_detail}")
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
+    return None
+
+
 def show_response(resp: requests.Response, success_code: int, success_msg: str) -> None:
     if resp.status_code == success_code:
         st.success(f"{success_msg}")
@@ -102,13 +211,42 @@ def highlight_low_stock(row: pd.Series) -> list:
 st.sidebar.title("Inventory Dashboard")
 section = st.sidebar.radio(
     "Navigation",
-    [NAV_LIST, NAV_CREATE, NAV_UPDATE, NAV_DELETE, NAV_CSV, NAV_SCENARIOS],
+    [NAV_LIST, NAV_CREATE, NAV_UPDATE, NAV_DELETE, NAV_CSV, NAV_SCENARIOS, NAV_EXPERT, NAV_QUOTE],
 )
 
 
 if section == NAV_LIST:
     st.title("Product List")
 
+    # Similarity Search Section
+    st.subheader("🔍 Find Similar Products")
+    sim_search_col1, sim_search_col2 = st.columns([3, 1])
+    with sim_search_col1:
+        similarity_search = st.text_input("Search by query for similar items", placeholder="Enter product name, description, or query…")
+    with sim_search_col2:
+        similarity_top_k = st.number_input("Top K results", min_value=1, max_value=50, value=10)
+    
+    # Display similarity search results if a query is provided
+    if similarity_search:
+        st.divider()
+        st.subheader("Similar Products Results")
+        try:
+            similar_products = fetch_similar_products(query=similarity_search, top_k=int(similarity_top_k))
+            if similar_products:
+                similar_df = pd.DataFrame(similar_products)
+                for col in DISPLAY_COLUMNS:
+                    if col not in similar_df.columns:
+                        similar_df[col] = ""
+                similar_df = similar_df[[col for col in DISPLAY_COLUMNS if col in similar_df.columns]]
+                st.caption(f"Found **{len(similar_df)}** similar product(s)")
+                st.dataframe(similar_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No similar products found.")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error fetching similar products: {str(e)}")
+        st.divider()
+
+    st.subheader("All Products")
     col_search, col_cat, col_refresh = st.columns([3, 2, 1])
     with col_search:
         search = st.text_input("Search (name / barcode / description)", placeholder="laptop…")
@@ -151,9 +289,65 @@ if section == NAV_LIST:
         if low_stock_count:
             st.warning(f"**{low_stock_count}** product(s) are below their minimum stock level.")
 
-        styled = df.style.apply(highlight_low_stock, axis=1)
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        # Display products with "Find Similar" button
+        st.subheader("Product Details")
+        for idx, row in df.iterrows():
+            with st.container(border=True):
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.write(f"**{row['name']}** — {row.get('brand', '')}")
+                    st.caption(f"ID: {row['id']} | Category: {row.get('category', 'N/A')} | Price: ${row.get('price', 'N/A')} | Qty: {row.get('quantity', 'N/A')}")
+                    if row.get('description'):
+                        st.text(row['description'][:100] + ("..." if len(str(row['description'])) > 100 else ""))
+                
+                with col2:
+                    if st.button("🔗 Find Similar", key=f"btn_similar_{row['id']}", use_container_width=True):
+                        st.session_state.selected_product_id = row['id']
+                        st.session_state.show_similar = True
+                        st.rerun()
+        
+        # Handle similar products display when button is clicked
+        if st.session_state.get("show_similar") and st.session_state.get("selected_product_id"):
+            st.divider()
+            st.subheader(f"🔗 Top 10 Similar Products for ID: {st.session_state['selected_product_id']}")
+            
+            try:
+                similar_products = fetch_similar_products(
+                    product_id=st.session_state["selected_product_id"],
+                    top_k=10
+                )
+                if similar_products:
+                    similar_df = pd.DataFrame(similar_products)
+                    for col in DISPLAY_COLUMNS:
+                        if col not in similar_df.columns:
+                            similar_df[col] = ""
+                    similar_df = similar_df[[col for col in DISPLAY_COLUMNS if col in similar_df.columns]]
+                    st.dataframe(similar_df, use_container_width=True, hide_index=True)
+                    
+                    col_download, col_close = st.columns([1, 1])
+                    with col_download:
+                        st.download_button(
+                            label="Download as CSV",
+                            data=similar_df.to_csv(index=False).encode("utf-8"),
+                            file_name=f"similar_products_{st.session_state['selected_product_id']}.csv",
+                            mime=MIME_CSV,
+                        )
+                    with col_close:
+                        if st.button("Close", use_container_width=True):
+                            st.session_state.show_similar = False
+                            st.rerun()
+                else:
+                    st.info("No similar products found for this item.")
+                    if st.button("Close"):
+                        st.session_state.show_similar = False
+                        st.rerun()
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error fetching similar products: {str(e)}")
+                if st.button("Close"):
+                    st.session_state.show_similar = False
+                    st.rerun()
 
+        st.divider()
         st.download_button(
             label="Download current view as CSV",
             data=df.to_csv(index=False).encode("utf-8"),
@@ -345,7 +539,7 @@ elif section == NAV_CSV:
                 resp = requests.post(
                     PRODUCTS_CSV_URL,
                     files={"file": (uploaded.name, uploaded.getvalue(), MIME_CSV)},
-                    timeout=30,
+                    timeout=300,
                 )
                 if resp.status_code in (201, 207):
                     data = resp.json()
@@ -372,7 +566,7 @@ elif section == NAV_CSV:
                 resp = requests.patch(
                     PRODUCTS_CSV_URL,
                     files={"file": (uploaded_upd.name, uploaded_upd.getvalue(), MIME_CSV)},
-                    timeout=30,
+                    timeout=300,
                 )
                 if resp.status_code in (200, 207):
                     data = resp.json()
@@ -402,7 +596,7 @@ elif section == NAV_CSV:
                     resp = requests.delete(
                         PRODUCTS_CSV_URL,
                         files={"file": (uploaded_del.name, uploaded_del.getvalue(), MIME_CSV)},
-                        timeout=30,
+                        timeout=300,
                     )
                     if resp.status_code in (200, 207):
                         data = resp.json()
@@ -485,7 +679,7 @@ elif section == NAV_SCENARIOS:
                 resp = requests.post(
                     f"{BASE_URL}/ai/scenarios/",
                     json=payload,
-                    timeout=30
+                    timeout=300
                 )
                 
                 if resp.status_code == 201:
@@ -518,3 +712,153 @@ elif section == NAV_SCENARIOS:
         if st.button("🔄 Refresh", use_container_width=True):
             fetch_all_products.clear()
             st.rerun()
+
+
+elif section == NAV_EXPERT:
+    st.title("Ask the Expert")
+    st.caption("Ask grounded questions from policy/manual/FAQ docs with optional product context.")
+
+    categories = fetch_categories()
+    category_options = [LABEL_ALL_CATEGORIES] + categories
+
+    col_a, col_b, col_c = st.columns([1, 1, 2])
+    with col_a:
+        top_k = st.number_input("Top K sources", min_value=1, max_value=20, value=3)
+    with col_b:
+        include_product_context = st.checkbox("Include product context", value=True)
+    with col_c:
+        selected_category = st.selectbox("Category filter", options=category_options)
+
+    question = st.text_area(
+        "Your question",
+        placeholder="e.g. What is the warranty period for the Lego Castle?",
+        height=120,
+    )
+
+    ask_col, clear_col = st.columns([1, 1])
+    with ask_col:
+        ask_clicked = st.button("Ask Expert", type="primary", use_container_width=True)
+    with clear_col:
+        clear_clicked = st.button("Clear Chat", use_container_width=True)
+
+    if clear_clicked:
+        st.session_state.expert_chat_history = []
+        st.rerun()
+
+    if ask_clicked:
+        cleaned_question = question.strip()
+        if not cleaned_question:
+            st.warning("Please enter a question before submitting.")
+        else:
+            category = None if selected_category == LABEL_ALL_CATEGORIES else selected_category
+            with st.spinner("Retrieving context and generating answer..."):
+                response = ask_expert(
+                    question=cleaned_question,
+                    top_k=int(top_k),
+                    include_product_context=include_product_context,
+                    category=category,
+                )
+            if response:
+                st.session_state.expert_chat_history.append(
+                    {
+                        "question": cleaned_question,
+                        "answer": response.get("answer", ""),
+                        "sources": response.get("sources", []),
+                        "metadata": response.get("metadata", {}),
+                    }
+                )
+
+    if st.session_state.expert_chat_history:
+        st.divider()
+        st.subheader("Conversation")
+        for turn in st.session_state.expert_chat_history:
+            with st.container(border=True):
+                st.markdown(f"**You**: {turn.get('question', '')}")
+                st.markdown(f"**Expert**: {turn.get('answer', '')}")
+
+                sources = turn.get("sources") or []
+                if sources:
+                    with st.expander(f"Sources ({len(sources)})", expanded=False):
+                        for idx, source in enumerate(sources, start=1):
+                            source_name = source.get("source_name", "Unknown Source")
+                            source_id = source.get("source_id", "unknown")
+                            chunk_id = source.get("chunk_id", "unknown")
+                            score = float(source.get("score", 0.0) or 0.0)
+                            content = source.get("content", "")
+
+                            st.markdown(f"**{idx}. {source_name}**")
+                            st.caption(f"Score: {score:.4f} | Source ID: {source_id} | Chunk ID: {chunk_id}")
+                            st.write(content)
+                            st.divider()
+
+
+elif section == NAV_QUOTE:
+    st.title("Quote Agent")
+    st.caption("Generate a quote invoice from a natural language request.")
+
+    categories = fetch_categories()
+    category_options = [LABEL_ALL_CATEGORIES] + categories
+
+    col_top_k, col_qty, col_cat = st.columns([1, 1, 2])
+    with col_top_k:
+        top_k = st.number_input("Top K candidates", min_value=1, max_value=20, value=5)
+    with col_qty:
+        quantity_input = st.text_input("Quantity (optional)", placeholder="e.g. 60")
+    with col_cat:
+        selected_category = st.selectbox("Category filter", options=category_options)
+
+    query = st.text_area(
+        "Quote request",
+        placeholder="e.g. I need 60 building blocks for a school project, can I get a deal?",
+        height=120,
+    )
+
+    if st.button("Generate Quote Invoice", type="primary", use_container_width=True):
+        cleaned_query = query.strip()
+        if not cleaned_query:
+            st.warning("Please enter a quote request before submitting.")
+        else:
+            parsed_quantity: Optional[int] = None
+            if quantity_input.strip():
+                try:
+                    parsed_quantity = int(quantity_input.strip())
+                except ValueError:
+                    st.error("Quantity must be a whole number.")
+                    parsed_quantity = None
+                    cleaned_query = ""
+
+            if cleaned_query:
+                category = None if selected_category == LABEL_ALL_CATEGORIES else selected_category
+                with st.spinner("Identifying product, checking inventory, and generating quote..."):
+                    quote_response = request_quote_invoice(
+                        query=cleaned_query,
+                        top_k=int(top_k),
+                        quantity=parsed_quantity,
+                        category=category,
+                    )
+                if quote_response:
+                    st.subheader("Quote Invoice")
+
+                    metadata = quote_response.get("metadata") or {}
+                    selection_strategy = metadata.get("selection_strategy")
+                    if selection_strategy:
+                        st.caption(f"Selection strategy: {selection_strategy}")
+
+                    st.json(quote_response)
+
+                    candidates = quote_response.get("candidates") or []
+                    if candidates:
+                        st.subheader("Candidate Quotes (Ambiguous Match)")
+                        for candidate in candidates:
+                            candidate_meta = candidate.get("metadata") or {}
+                            rank = candidate_meta.get("rank", "?")
+                            score = candidate_meta.get("score")
+                            candidate_product = candidate.get("identified_product") or {}
+                            candidate_name = candidate_product.get("name", "Unknown product")
+
+                            title_parts = [f"#{rank}", candidate_name]
+                            if isinstance(score, (int, float)):
+                                title_parts.append(f"score {float(score):.4f}")
+
+                            with st.expander(" | ".join(title_parts), expanded=False):
+                                st.json(candidate)

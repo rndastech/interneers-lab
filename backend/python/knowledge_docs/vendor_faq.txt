@@ -1,0 +1,19 @@
+Vendor FAQ
+
+Q: How are vendor lead times defined?
+A: Lead time is the number of business days from purchase order confirmation to shipment dispatch.
+
+Q: What data should vendors provide for each product?
+A: Vendors should provide product title, category, brand, dimensions, unit cost, warranty terms, and support contacts.
+
+Q: How are defects handled?
+A: Vendors must acknowledge defect reports within 2 business days and provide replacement or credit terms.
+
+Q: Are there packaging standards?
+A: Yes. Vendors must follow packaging standards for cushioning, labeling, and tamper-evident seals.
+
+Q: Can vendors update catalog attributes?
+A: Yes, but updates must be versioned and include effective dates to prevent pricing and metadata conflicts.
+
+Q: How often should stock feeds be updated?
+A: At minimum once daily, and immediately for high-demand items with low inventory.
